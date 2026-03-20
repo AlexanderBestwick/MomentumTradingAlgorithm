@@ -1,0 +1,62 @@
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.trading.client import TradingClient
+import datetime
+import pandas as pd
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import talib as ta
+
+def LoadApprovedBars(csv_path="Data/ApprovedStockFrame.csv", *, days_back=30):
+    df = pd.read_csv(csv_path, parse_dates=["timestamp"])
+    df["timestamp"] = df["timestamp"].dt.tz_localize(None)
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=days_back)
+    return df[df["timestamp"] >= cutoff].set_index(["symbol", "timestamp"])
+
+def LinearRegression(trading_client, approved_stock_df=None, *, save_path="Data/MomentumResults.csv", trading_days=250, risk_factor=0.001, atr_lookback=20):
+
+    account_value = float(trading_client.get_account().portfolio_value)
+
+    if approved_stock_df is None:
+        approved_stock_df = LoadApprovedBars()
+
+    stock_results = []
+
+    for symbol, stock_frame in approved_stock_df.groupby(level="symbol"):
+        stock_frame = stock_frame.droplevel("symbol")
+        high = stock_frame["high"].to_numpy()
+        low = stock_frame["low"].to_numpy()
+        close = stock_frame["close"].to_numpy()
+
+        atr = ta.ATR(high, low, close, timeperiod=atr_lookback)
+        atr_current = atr[-1]
+
+        daily_average = (high + low + close) / 3
+
+        log_daily_average = np.log(daily_average)
+        x_days = np.arange(len(log_daily_average))
+
+        slope, intercept, r_value, p_value, std_err = linregress(x_days, log_daily_average)
+
+        annualised_return = np.exp(slope * trading_days) - 1
+        momentum = annualised_return * (r_value ** 2)
+        position_size = (account_value * risk_factor) / atr_current
+
+        stock_results.append(
+            {
+                "symbol": symbol,
+                "momentum": momentum,
+                "shares": position_size,
+                "annualised_return": annualised_return,
+                "atr": atr_current,
+            }
+        )
+
+    result_df = pd.DataFrame(stock_results)
+    result_df = result_df.sort_values("momentum", ascending=False).reset_index(drop=True)
+
+    if save_path:
+        result_df.to_csv(save_path, index=False)
+        print(f"Momentum results saved to {save_path}")
+
+    return result_df
