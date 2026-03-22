@@ -4,11 +4,12 @@ from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 import time
 
 
-def close_positions(trading_client, target_symbols):
+def close_positions(trading_client, target_symbols, protected_symbols=None):
     """Sell any position not in the target list."""
+    protected_symbols = set(protected_symbols or [])
     current_shares = {p.symbol: float(p.qty) for p in trading_client.get_all_positions()}
     held_symbols = set(current_shares)
-    to_sell = held_symbols - set(target_symbols)
+    to_sell = held_symbols - set(target_symbols) - protected_symbols
 
     for sym in to_sell:
         try:
@@ -20,12 +21,12 @@ def close_positions(trading_client, target_symbols):
     return to_sell
 
 
-def open_positions(trading_client, data_client, momentum_df, market_health, top_n=60, cash_buffer=1):
+def open_positions(trading_client, data_client, momentum_df, market_health, top_n=80, cash_buffer=1, sleep_seconds=2):
     """Open new positions from momentum list (only in healthy markets)."""
     if not market_health:
-        print("Bad Markets: Enter at risk")
+        print("Bad Markets: skipping new buys")
         print()
-        #return []
+        return []
 
     target_symbols = set(momentum_df.head(top_n)["symbol"])
     current_shares = {p.symbol: float(p.qty) for p in trading_client.get_all_positions()}
@@ -58,7 +59,8 @@ def open_positions(trading_client, data_client, momentum_df, market_health, top_
             remaining_balance -= cost_estimate
             buys.append(sym)
         else:
-            time.sleep(2)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
             remaining_balance = float(trading_client.get_account().cash)
             if remaining_balance <= cash_buffer:
                 break
@@ -81,3 +83,37 @@ def open_positions(trading_client, data_client, momentum_df, market_health, top_
             break
 
     return buys
+
+
+def allocate_defensive_position(
+    trading_client,
+    data_client,
+    market_health,
+    *,
+    mode="cash",
+    defensive_symbol="SGOV",
+    cash_buffer=1,
+):
+    if market_health or mode != "treasury_bonds":
+        return []
+
+    remaining_balance = float(trading_client.get_account().cash)
+    if remaining_balance <= cash_buffer:
+        print(f"No idle cash available for defensive allocation into {defensive_symbol}")
+        return []
+
+    notional = round(remaining_balance - cash_buffer, 2)
+    if notional <= 0:
+        print(f"Skipping defensive allocation for {defensive_symbol}: notional too small")
+        return []
+
+    order = OrderRequest(
+        symbol=defensive_symbol,
+        notional=notional,
+        side=OrderSide.BUY,
+        type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+    )
+    trading_client.submit_order(order)
+    print(f"Allocated {notional:.2f} USD to defensive Treasury holding {defensive_symbol}")
+    return [defensive_symbol]

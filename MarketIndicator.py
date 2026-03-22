@@ -3,16 +3,21 @@ from alpaca.data.timeframe import TimeFrame
 import datetime
 
 
-def MarketIndicator(client, *, symbol="SPTM", lookback_days=250):
+def MarketIndicator(client, *, symbol="SPTM", lookback_days=250, as_of_date=None):
+    if as_of_date is None:
+        as_of_date = datetime.date.today()
 
     request_params = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Day,
-        start=datetime.date.today() - datetime.timedelta(days=lookback_days),
+        start=as_of_date - datetime.timedelta(days=lookback_days),
+        end=as_of_date,
     )
 
     bars = client.get_stock_bars(request_params)
     df = bars.df
+    if df.empty:
+        raise ValueError(f"No market indicator data returned for {symbol} on or before {as_of_date}.")
 
     df['daily_average'] = (df['high'] + df['low'] + df['close']) / 3
     df['200_average'] = df['daily_average'].mean()

@@ -2,11 +2,11 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.requests import OrderRequest
 from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 import time
-import pandas as pd
 
 
-def sell_overrisked(trading_client, momentum_df, threshold=2/3):
-    current_positions = trading_client.get_all_positions()
+def sell_overrisked(trading_client, momentum_df, threshold=2/3, protected_symbols=None):
+    protected_symbols = set(protected_symbols or [])
+    current_positions = [p for p in trading_client.get_all_positions() if p.symbol not in protected_symbols]
     current_shares = {p.symbol: float(p.qty) for p in current_positions}
 
     # Map current holdings to new ideal position sizes
@@ -38,12 +38,22 @@ def sell_overrisked(trading_client, momentum_df, threshold=2/3):
     return sold
 
 
-def buy_underrisked(trading_client, data_client, momentum_df, market_health, threshold=3/2, cash_buffer=1):
+def buy_underrisked(
+    trading_client,
+    data_client,
+    momentum_df,
+    market_health,
+    threshold=3/2,
+    cash_buffer=1,
+    sleep_seconds=2,
+    protected_symbols=None,
+):
     if not market_health:
-        print("Bad Markets: Enter at risk")
-        #return []
+        print("Bad Markets: skipping risk-balance buys")
+        return []
 
-    current_positions = trading_client.get_all_positions()
+    protected_symbols = set(protected_symbols or [])
+    current_positions = [p for p in trading_client.get_all_positions() if p.symbol not in protected_symbols]
     current_shares = {p.symbol: float(p.qty) for p in current_positions}
 
     # Map current holdings to new ideal position sizes
@@ -82,7 +92,8 @@ def buy_underrisked(trading_client, data_client, momentum_df, market_health, thr
             remaining_balance -= cost_estimate
             bought.append(sym)
         else:
-            time.sleep(2)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
             remaining_balance = float(trading_client.get_account().cash)
             if remaining_balance <= cash_buffer:
                 break
