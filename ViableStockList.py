@@ -10,6 +10,7 @@ import itertools
 from pathlib import Path
 import pandas as pd
 import re
+from Functions.TradingDays import calendar_days_for_trading_window, trim_multiindex_to_trailing_trading_days
 
 DEFAULT_HOLDINGS_PATH = "Data/holdings-daily-us-en-sptm.csv"
 
@@ -36,6 +37,8 @@ def BuildSelectionUniverse(
     min_days=95,
     batch_size=1550,
     history_days=150,
+    volatility_days=90,
+    moving_average_days=100,
     as_of_date=None,
     save_path="Data/ApprovedStockFrame.csv",
 ):
@@ -53,7 +56,9 @@ def BuildSelectionUniverse(
                 break
             yield batch
 
-    anchor_date = as_of_date - datetime.timedelta(days=history_days - 5)
+    required_trading_days = max(min_days, volatility_days + 1, moving_average_days)
+    requested_trading_days = max(history_days, required_trading_days)
+    calendar_history_days = calendar_days_for_trading_window(requested_trading_days)
 
     approved_stocks = []
     full_stock_frames = []
@@ -67,7 +72,7 @@ def BuildSelectionUniverse(
         req = StockBarsRequest(
             symbol_or_symbols=batch,
             timeframe=TimeFrame.Day,
-            start=as_of_date - datetime.timedelta(days=history_days),
+            start=as_of_date - datetime.timedelta(days=calendar_history_days),
             end=as_of_date,
             adjustment="all",
         )
@@ -76,35 +81,47 @@ def BuildSelectionUniverse(
         if df.empty:
             datafail_stocks.extend(batch)
             continue
+        df = trim_multiindex_to_trailing_trading_days(df, requested_trading_days)
+        if df.empty:
+            datafail_stocks.extend(batch)
+            continue
+
         df["daily_average"] = (df["high"] + df["low"] + df["close"]) / 3
+
         full_stock_frames.append(df)
 
-        average = df.groupby(level="symbol")["daily_average"].mean()
-        latest_close = df.groupby(level="symbol")["close"].last()
-        earliest_bar = df.reset_index().groupby("symbol")["timestamp"].min()
-
         df["DailyCloseChange"] = df["close"].groupby(level="symbol").pct_change().abs()
+        df["MovingAverage"] = (
+            df["close"]
+            .groupby(level="symbol")
+            .transform(lambda series: series.rolling(window=moving_average_days, min_periods=moving_average_days).mean())
+        )
 
         passing_stocks = []
+        available_symbols = set(df.index.get_level_values("symbol"))
 
         for sym in batch:
-            first_bar = earliest_bar.get(sym)
-            if pd.isna(first_bar) or first_bar.date() > anchor_date:
+            if sym not in available_symbols:
+                datafail_stocks.append(sym)
+                continue
+
+            symbol_frame = df.loc[sym].sort_index()
+            if len(symbol_frame) < required_trading_days:
                 short_history_stocks.append(sym)
                 continue
 
-            avg = average.get(sym)
-            close = latest_close.get(sym)
-            max_gap = df.loc[sym, "DailyCloseChange"].tail(90).max(skipna=True)
+            moving_average = symbol_frame["MovingAverage"].iloc[-1]
+            close = symbol_frame["close"].iloc[-1]
+            max_gap = symbol_frame["DailyCloseChange"].tail(volatility_days).max(skipna=True)
 
             if pd.notna(max_gap) and max_gap > 0.15:
                 volatile_stocks.append(sym)
                 continue
 
-            if pd.notna(avg) and close > avg:
+            if pd.notna(moving_average) and close > moving_average:
                 approved_stocks.append(sym)
                 passing_stocks.append(sym)
-            elif pd.notna(avg):
+            elif pd.notna(moving_average):
                 rejected_stocks.append(sym)
             else:
                 datafail_stocks.append(sym)
@@ -136,12 +153,24 @@ def BuildSelectionUniverse(
     }
 
 
-def GenerateStockList(data_client, *, min_days=95, batch_size=1550, history_days=150, as_of_date=None, save_path="Data/ApprovedStockFrame.csv"):
+def GenerateStockList(
+    data_client,
+    *,
+    min_days=95,
+    batch_size=1550,
+    history_days=150,
+    volatility_days=90,
+    moving_average_days=100,
+    as_of_date=None,
+    save_path="Data/ApprovedStockFrame.csv",
+):
     selection_universe = BuildSelectionUniverse(
         data_client,
         min_days=min_days,
         batch_size=batch_size,
         history_days=history_days,
+        volatility_days=volatility_days,
+        moving_average_days=moving_average_days,
         as_of_date=as_of_date,
         save_path=save_path,
     )

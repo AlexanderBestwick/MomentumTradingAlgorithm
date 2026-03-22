@@ -1,6 +1,7 @@
 import argparse
 import datetime as dt
 from pathlib import Path
+import sys
 from time import perf_counter
 from types import SimpleNamespace
 from alpaca.data.historical import StockHistoricalDataClient
@@ -11,8 +12,9 @@ from matplotlib.ticker import PercentFormatter
 from matplotlib.transforms import blended_transform_factory
 import pandas as pd
 
-import Keys
+from Config import get_alpaca_credentials
 from FullRun import RunAll
+from Functions.TradingDays import calendar_days_for_trading_window
 from ViableStockList import load_snp1500_symbols
 
 
@@ -22,19 +24,20 @@ DEFAULT_CHART_PATH = Path("Data/BacktestResults.png")
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2017-02-01"
-EDITOR_END_DATE = "2026-02-01"
+EDITOR_START_DATE = "2018-07-01"
+EDITOR_END_DATE = "2019-07-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")
 EDITOR_CHART_PATH = Path("Data/BacktestResults.png")
 EDITOR_CACHE_PATH = None #Path("Data/backtest_cache_20160517_20260201(Long).PKL")
 EDITOR_BATCH_SIZE = 400
-EDITOR_WARMUP_DAYS = 260
+EDITOR_WARMUP_DAYS = 260  # trading days
 EDITOR_RUN_ON_SCHEDULE_ONLY = True
 EDITOR_STRATEGY_WEEKDAY = 2  # Monday=0, Tuesday=1, Wednesday=2
 EDITOR_RAW_RANK_CONSIDERATION_LIMIT = 100
-EDITOR_DEFENSIVE_MODE = "treasury_bonds"  # "cash" or "treasury_bonds"
+EDITOR_MAX_POSITION_FRACTION = 0.10
+EDITOR_DEFENSIVE_MODE = "cash"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005
@@ -366,7 +369,8 @@ def load_or_fetch_historical_bars(
         print(f"Cache missing {len(set(symbols) - available_symbols)} symbols. Refetching historical bars.")
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    live_data_client = StockHistoricalDataClient(Keys.Key_Test, Keys.Secret_Test)
+    credentials = get_alpaca_credentials()
+    live_data_client = StockHistoricalDataClient(credentials.key, credentials.secret)
     bars_df = fetch_historical_bars(
         live_data_client,
         symbols,
@@ -505,6 +509,7 @@ def run_backtest(
     run_on_schedule_only=True,
     strategy_weekday=2,
     raw_rank_consideration_limit=80,
+    max_position_fraction=0.10,
     defensive_mode="cash",
     defensive_symbol="SGOV",
     trade_fee_flat=0.0,
@@ -513,7 +518,7 @@ def run_backtest(
     timer_start = perf_counter()
     start_date = _coerce_date(start_date)
     end_date = _coerce_date(end_date)
-    preload_start = start_date - dt.timedelta(days=warmup_days)
+    preload_start = start_date - dt.timedelta(days=calendar_days_for_trading_window(warmup_days))
 
     universe_symbols = set(load_snp1500_symbols()) | {benchmark_symbol}
     if defensive_mode == "treasury_bonds":
@@ -560,15 +565,19 @@ def run_backtest(
         run_summary = None
         if strategy_ran:
             print(f"[{step_number}/{len(benchmark_index)}] Running strategy for {run_date.isoformat()}")
-            run_summary = RunAll(
-                trading_client=trading_client,
-                data_client=data_client,
-                run_date=run_date,
-                save_outputs=False,
-                raw_rank_consideration_limit=raw_rank_consideration_limit,
-                defensive_mode=defensive_mode,
-                defensive_symbol=defensive_symbol,
-            )
+            try:
+                run_summary = RunAll(
+                    trading_client=trading_client,
+                    data_client=data_client,
+                    run_date=run_date,
+                    save_outputs=False,
+                    raw_rank_consideration_limit=raw_rank_consideration_limit,
+                    max_position_fraction=max_position_fraction,
+                    defensive_mode=defensive_mode,
+                    defensive_symbol=defensive_symbol,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"Backtest failed on {run_date.isoformat()}") from exc
 
         if step_number == 1 and not strategy_ran:
             print(f"[{step_number}/{len(benchmark_index)}] Tracking portfolio from {run_date.isoformat()} until the first scheduled run")
@@ -603,6 +612,7 @@ def run_backtest(
                 "fees_paid_cumulative": trading_client.total_fees_paid,
                 "trade_count": len(trading_client.order_log),
                 "raw_rank_consideration_limit": raw_rank_consideration_limit,
+                "max_position_fraction": max_position_fraction,
             }
         )
 
@@ -634,8 +644,9 @@ def parse_args():
     parser.add_argument("--chart-path", default=str(DEFAULT_CHART_PATH), help="Chart output path.")
     parser.add_argument("--cache-path", default=None, help="Optional cache file for historical bars.")
     parser.add_argument("--batch-size", type=int, default=400, help="Historical data request batch size.")
-    parser.add_argument("--warmup-days", type=int, default=260, help="Extra history to preload before the start date.")
+    parser.add_argument("--warmup-days", type=int, default=260, help="Extra trading days to preload before the start date.")
     parser.add_argument("--raw-rank-consideration-limit", type=int, default=80, help="Shared raw-rank cutoff used for both sell decisions and post-filter buy consideration.")
+    parser.add_argument("--max-position-fraction", type=float, default=0.10, help="Hard cap on how large a single stock position can be as a fraction of portfolio value.")
     parser.add_argument("--defensive-mode", default="cash", choices=["cash", "treasury_bonds"], help="How to handle idle cash during bad markets.")
     parser.add_argument("--defensive-symbol", default="SGOV", help="Treasury ETF to use when defensive mode is treasury_bonds.")
     parser.add_argument("--trade-fee-flat", type=float, default=0.0, help="Flat USD fee applied to every trade in the backtest.")
@@ -657,6 +668,7 @@ def run_backtest_from_editor_settings():
         run_on_schedule_only=EDITOR_RUN_ON_SCHEDULE_ONLY,
         strategy_weekday=EDITOR_STRATEGY_WEEKDAY,
         raw_rank_consideration_limit=EDITOR_RAW_RANK_CONSIDERATION_LIMIT,
+        max_position_fraction=EDITOR_MAX_POSITION_FRACTION,
         defensive_mode=EDITOR_DEFENSIVE_MODE,
         defensive_symbol=EDITOR_DEFENSIVE_SYMBOL,
         trade_fee_flat=EDITOR_TRADE_FEE_FLAT,
@@ -665,23 +677,28 @@ def run_backtest_from_editor_settings():
 
 
 if __name__ == "__main__":
-    if RUN_WITH_EDITOR_SETTINGS:
-        run_backtest_from_editor_settings()
-    else:
-        args = parse_args()
-        run_backtest(
-            args.start,
-            args.end,
-            initial_cash=args.initial_cash,
-            benchmark_symbol=args.benchmark,
-            results_path=args.results_path,
-            chart_path=args.chart_path,
-            cache_path=args.cache_path,
-            batch_size=args.batch_size,
-            warmup_days=args.warmup_days,
-            raw_rank_consideration_limit=args.raw_rank_consideration_limit,
-            defensive_mode=args.defensive_mode,
-            defensive_symbol=args.defensive_symbol,
-            trade_fee_flat=args.trade_fee_flat,
-            trade_fee_rate=args.trade_fee_rate,
-        )
+    try:
+        if RUN_WITH_EDITOR_SETTINGS:
+            run_backtest_from_editor_settings()
+        else:
+            args = parse_args()
+            run_backtest(
+                args.start,
+                args.end,
+                initial_cash=args.initial_cash,
+                benchmark_symbol=args.benchmark,
+                results_path=args.results_path,
+                chart_path=args.chart_path,
+                cache_path=args.cache_path,
+                batch_size=args.batch_size,
+                warmup_days=args.warmup_days,
+                raw_rank_consideration_limit=args.raw_rank_consideration_limit,
+                max_position_fraction=args.max_position_fraction,
+                defensive_mode=args.defensive_mode,
+                defensive_symbol=args.defensive_symbol,
+                trade_fee_flat=args.trade_fee_flat,
+                trade_fee_rate=args.trade_fee_rate,
+            )
+    except Exception as exc:
+        print(f"Backtest run failed: {exc}", file=sys.stderr)
+        raise

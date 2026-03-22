@@ -1,7 +1,8 @@
 from datetime import date
+import sys
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
-import Keys
+from Config import get_alpaca_credentials
 from Functions.Is2ndWeek import second_week
 import MarketIndicator
 import ViableStockList
@@ -10,9 +11,17 @@ import PortfolioBalancer
 import RiskBalancer
 
 
+def _run_step(step_name, func, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except Exception as exc:
+        raise RuntimeError(f"{step_name} failed") from exc
+
+
 def build_live_clients():
-    trading_client = TradingClient(Keys.Key_Test, Keys.Secret_Test)
-    data_client = StockHistoricalDataClient(Keys.Key_Test, Keys.Secret_Test)
+    credentials = get_alpaca_credentials()
+    trading_client = TradingClient(credentials.key, credentials.secret, paper=credentials.paper)
+    data_client = StockHistoricalDataClient(credentials.key, credentials.secret)
     return trading_client, data_client
 
 
@@ -25,6 +34,7 @@ def RunAll(
     defensive_mode="cash",
     defensive_symbol="SGOV",
     raw_rank_consideration_limit=80,
+    max_position_fraction=0.10,
 ):
     if trading_client is None or data_client is None:
         trading_client, data_client = build_live_clients()
@@ -39,11 +49,18 @@ def RunAll(
 
     print()
     # 1) Market health - required before new buys.
-    market_health = MarketIndicator.MarketIndicator(data_client, as_of_date=run_date)
+    market_health = _run_step(
+        f"Market health check for {run_date.isoformat()}",
+        MarketIndicator.MarketIndicator,
+        data_client,
+        as_of_date=run_date,
+    )
     print()
 
     # 2) Build full universe once, then keep the existing filters unchanged.
-    selection_universe = ViableStockList.BuildSelectionUniverse(
+    selection_universe = _run_step(
+        f"Universe selection for {run_date.isoformat()}",
+        ViableStockList.BuildSelectionUniverse,
         data_client,
         as_of_date=run_date,
         save_path=approved_save_path,
@@ -53,10 +70,13 @@ def RunAll(
     print()
 
     # 3) Rank the full index first.
-    full_ranked_universe = LinearRegression.LinearRegression(
+    full_ranked_universe = _run_step(
+        f"Momentum ranking for {run_date.isoformat()}",
+        LinearRegression.LinearRegression,
         trading_client,
         selection_universe["full_stock_df"],
         save_path=momentum_save_path,
+        max_position_fraction=max_position_fraction,
     )
 
     # 4) Use one shared raw-rank cutoff for both sell and buy consideration.
@@ -78,9 +98,19 @@ def RunAll(
 
     # 5) Sell only when a held stock falls outside the shared raw-rank cutoff.
     target_symbols = set(raw_sell_universe["symbol"])
-    closed = PortfolioBalancer.close_positions(
+    closed = _run_step(
+        f"Position close step for {run_date.isoformat()}",
+        PortfolioBalancer.close_positions,
         trading_client,
         target_symbols,
+        protected_symbols=protected_symbols,
+    )
+    capped_sells = _run_step(
+        f"Position cap enforcement step for {run_date.isoformat()}",
+        RiskBalancer.sell_above_cap,
+        trading_client,
+        data_client,
+        max_position_fraction=max_position_fraction,
         protected_symbols=protected_symbols,
     )
     print()
@@ -88,18 +118,23 @@ def RunAll(
     # 6) Extra check every 2nd Wednesday: sell sizing uses raw ranking, buy sizing uses filtered buy universe.
     if second_week(run_date):
         print("Risk Balancing in Progress: Do not interrupt")
-        overrisked = RiskBalancer.sell_overrisked(
+        overrisked = _run_step(
+            f"Risk reduction step for {run_date.isoformat()}",
+            RiskBalancer.sell_overrisked,
             trading_client,
             raw_sell_universe,
             protected_symbols=protected_symbols,
         )
         if market_health:
-            underrisked = RiskBalancer.buy_underrisked(
+            underrisked = _run_step(
+                f"Risk rebalance buy step for {run_date.isoformat()}",
+                RiskBalancer.buy_underrisked,
                 trading_client,
                 data_client,
                 filtered_buy_universe,
                 market_health,
                 sleep_seconds=sleep_seconds,
+                max_position_fraction=max_position_fraction,
                 protected_symbols=protected_symbols,
             )
         else:
@@ -112,19 +147,24 @@ def RunAll(
 
     # 7) Buy only from the filtered subset of the shared raw-rank cutoff.
     if market_health:
-        opened = PortfolioBalancer.open_positions(
+        opened = _run_step(
+            f"New position opening step for {run_date.isoformat()}",
+            PortfolioBalancer.open_positions,
             trading_client,
             data_client,
             filtered_buy_universe,
             market_health,
             top_n=raw_rank_consideration_limit,
             sleep_seconds=sleep_seconds,
+            max_position_fraction=max_position_fraction,
         )
     else:
         print("Bad Markets: sell-only mode, no new positions opened")
         opened = []
 
-    defensive_buys = PortfolioBalancer.allocate_defensive_position(
+    defensive_buys = _run_step(
+        f"Defensive allocation step for {run_date.isoformat()}",
+        PortfolioBalancer.allocate_defensive_position,
         trading_client,
         data_client,
         market_health,
@@ -142,6 +182,7 @@ def RunAll(
         "raw_buy_universe": raw_buy_universe,
         "filtered_buy_universe": filtered_buy_universe,
         "closed": closed,
+        "capped_sells": capped_sells,
         "overrisked": overrisked,
         "underrisked": underrisked,
         "opened": opened,
@@ -149,9 +190,14 @@ def RunAll(
         "defensive_mode": defensive_mode,
         "defensive_symbol": defensive_symbol,
         "raw_rank_consideration_limit": raw_rank_consideration_limit,
+        "max_position_fraction": max_position_fraction,
         "momentum": filtered_buy_universe,
     }
 
 
 if __name__ == "__main__":
-    RunAll()
+    try:
+        RunAll()
+    except Exception as exc:
+        print(f"Strategy run failed: {exc}", file=sys.stderr)
+        raise

@@ -6,17 +6,28 @@ import numpy as np
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import talib as ta
+from Functions.PositionCap import capped_target_shares
+from Functions.TradingDays import trim_multiindex_to_trailing_trading_days
 
 def LoadApprovedBars(csv_path="Data/ApprovedStockFrame.csv", *, days_back=30, as_of_date=None):
     df = pd.read_csv(csv_path, parse_dates=["timestamp"])
     df["timestamp"] = df["timestamp"].dt.tz_localize(None)
-    if as_of_date is None:
-        cutoff = datetime.datetime.now() - datetime.timedelta(days=days_back)
-    else:
-        cutoff = datetime.datetime.combine(as_of_date, datetime.time.min) - datetime.timedelta(days=days_back)
-    return df[df["timestamp"] >= cutoff].set_index(["symbol", "timestamp"])
+    if as_of_date is not None:
+        cutoff = datetime.datetime.combine(as_of_date, datetime.time.max)
+        df = df[df["timestamp"] <= cutoff]
+    indexed = df.set_index(["symbol", "timestamp"]).sort_index()
+    return trim_multiindex_to_trailing_trading_days(indexed, days_back)
 
-def LinearRegression(trading_client, approved_stock_df=None, *, save_path="Data/MomentumResults.csv", trading_days=250, risk_factor=0.001, atr_lookback=20):
+def LinearRegression(
+    trading_client,
+    approved_stock_df=None,
+    *,
+    save_path="Data/MomentumResults.csv",
+    trading_days=250,
+    risk_factor=0.001,
+    atr_lookback=20,
+    max_position_fraction=0.10,
+):
 
     account_value = float(trading_client.get_account().portfolio_value)
 
@@ -59,7 +70,14 @@ def LinearRegression(trading_client, approved_stock_df=None, *, save_path="Data/
 
         annualised_return = np.exp(slope * trading_days) - 1
         momentum = annualised_return * (r_value ** 2)
-        position_size = (account_value * risk_factor) / atr_current
+        risk_based_position_size = (account_value * risk_factor) / atr_current
+        latest_close = close[-1]
+        position_size = capped_target_shares(
+            risk_based_position_size,
+            account_value,
+            latest_close,
+            max_position_fraction,
+        )
         if np.isnan(momentum) or np.isnan(position_size):
             continue
 

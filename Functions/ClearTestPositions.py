@@ -4,9 +4,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import Keys
+from Config import get_alpaca_credentials
 
-trading_client = TradingClient(Keys.Key_Test, Keys.Secret_Test, paper=True)
+credentials = get_alpaca_credentials()
+if not credentials.paper:
+    raise RuntimeError("ClearTestPositions.py only supports ALPACA_ENV=paper.")
+
+trading_client = TradingClient(credentials.key, credentials.secret, paper=True)
 
 trading_client.close_all_positions(cancel_orders=True)
 

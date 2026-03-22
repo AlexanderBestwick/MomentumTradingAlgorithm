@@ -208,4 +208,6 @@ marimo/_lsp/
 __marimo__/
 
 # Local data and generated outputs
-Data/
+Data/**
+!Data/
+!Data/holdings-daily-us-en-sptm.csv
