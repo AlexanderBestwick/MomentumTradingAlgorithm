@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+Functions/__pycache__/
+frontend/
+.env
+.env.*
+!.env.example
+Keys.py
+Notes
+Data/*
+!Data/holdings-daily-us-en-sptm.csv
+*.pyc
+*.pyo
+*.pyd

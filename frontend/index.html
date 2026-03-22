@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Momentum Trading Dashboard</title>
+    <meta
+        name="description"
+        content="Starter dashboard for your momentum strategy status, backtests, and error monitoring."
+    >
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet"
+    >
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">Deployment Dashboard</p>
+                <h1>Momentum Trading Control Room</h1>
+                <p class="hero-text">
+                    A starter frontend for tracking weekly runs, backtests, reserve posture, and anything
+                    that needs your attention before capital goes live.
+                </p>
+                <div class="hero-actions">
+                    <a class="button button-primary" href="#run-center">View Latest Run</a>
+                    <a class="button button-secondary" href="#error-feed">Review Errors</a>
+                </div>
+            </div>
+            <div class="hero-panel">
+                <div class="signal-card">
+                    <span class="signal-label">Current Mode</span>
+                    <strong id="hero-mode">Paper / Cash Defense</strong>
+                </div>
+                <div class="signal-card">
+                    <span class="signal-label">Last Refresh</span>
+                    <strong id="hero-refresh">Loading...</strong>
+                </div>
+                <div class="signal-card">
+                    <span class="signal-label">Status</span>
+                    <strong class="status-pill status-live" id="hero-status">Healthy</strong>
+                </div>
+            </div>
+        </header>
+
+        <main class="dashboard">
+            <section class="summary-grid" aria-label="Summary cards">
+                <article class="summary-card">
+                    <p class="summary-label">Last Portfolio Value</p>
+                    <h2 id="portfolio-value">$0</h2>
+                    <p class="summary-note">Includes equities plus reserve allocation.</p>
+                </article>
+                <article class="summary-card">
+                    <p class="summary-label">Reserve Allocation</p>
+                    <h2 id="reserve-value">0%</h2>
+                    <p class="summary-note">Cash or Treasury allocation depending on mode.</p>
+                </article>
+                <article class="summary-card">
+                    <p class="summary-label">Latest Backtest Alpha</p>
+                    <h2 id="alpha-value">0%</h2>
+                    <p class="summary-note">Strategy value minus normalized SPTM benchmark.</p>
+                </article>
+                <article class="summary-card">
+                    <p class="summary-label">Latest Backtest Created</p>
+                    <h2 id="next-run">No runs yet</h2>
+                    <p class="summary-note">Timestamp of the selected backtest export.</p>
+                </article>
+            </section>
+
+            <section class="content-grid">
+                <article class="panel panel-wide" id="run-center">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">Backtest Center</p>
+                            <h3>Recent Strategy Tests</h3>
+                        </div>
+                        <span class="tag" id="history-tag">Waiting for Runs</span>
+                    </div>
+                    <div class="run-metrics" id="run-metrics"></div>
+                    <div class="run-log">
+                        <div class="run-log-header">
+                            <h4>Latest Backtest Runs</h4>
+                            <p>Click a run to update the chart and details panel.</p>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Created</th>
+                                        <th>Period</th>
+                                        <th>Defense</th>
+                                        <th>Return</th>
+                                        <th>Alpha</th>
+                                        <th>Trades</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="run-history-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="panel" id="error-feed">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">Error Feed</p>
+                            <h3>Things You Should See Quickly</h3>
+                        </div>
+                    </div>
+                    <div class="stack-list" id="error-list"></div>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">Backtest</p>
+                            <h3>Selected Run</h3>
+                        </div>
+                        <span class="tag" id="selected-run-tag">No Run Loaded</span>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-stage">
+                            <svg
+                                id="backtest-chart"
+                                class="backtest-chart"
+                                viewBox="0 0 760 320"
+                                role="img"
+                                aria-label="Selected backtest chart"
+                            ></svg>
+                            <div class="chart-empty" id="chart-empty">
+                                Run a backtest to populate <code>frontend/data/backtest-history.json</code>.
+                            </div>
+                        </div>
+                        <div class="chart-legend" id="chart-legend"></div>
+                        <div class="backtest-meta" id="backtest-meta"></div>
+                    </div>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">Next Steps</p>
+                            <h3>Upgrade Path</h3>
+                        </div>
+                    </div>
+                    <ul class="action-list">
+                        <li>Each backtest now updates <code>frontend/data/backtest-history.json</code>.</li>
+                        <li>Later swap the static JSON fetch for a backend API when you deploy.</li>
+                        <li>Add a live-run error feed once you start storing failures centrally.</li>
+                        <li>Later migrate this layout into Next.js when Node is installed.</li>
+                    </ul>
+                </article>
+            </section>
+        </main>
+    </div>
+
+    <script src="./app.js"></script>
+</body>
+</html>

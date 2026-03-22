@@ -1,5 +1,6 @@
 import argparse
 import datetime as dt
+import json
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -20,11 +21,13 @@ from ViableStockList import load_snp1500_symbols
 
 DEFAULT_RESULTS_PATH = Path("Data/BacktestResults.csv")
 DEFAULT_CHART_PATH = Path("Data/BacktestResults.png")
+DEFAULT_FRONTEND_HISTORY_PATH = Path("frontend/data/backtest-history.json")
+DEFAULT_FRONTEND_HISTORY_LIMIT = 6
 
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2018-07-01"
+EDITOR_START_DATE = "2019-04-01"
 EDITOR_END_DATE = "2019-07-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
@@ -37,10 +40,13 @@ EDITOR_RUN_ON_SCHEDULE_ONLY = True
 EDITOR_STRATEGY_WEEKDAY = 2  # Monday=0, Tuesday=1, Wednesday=2
 EDITOR_RAW_RANK_CONSIDERATION_LIMIT = 100
 EDITOR_MAX_POSITION_FRACTION = 0.10
-EDITOR_DEFENSIVE_MODE = "cash"  # "cash" or "treasury_bonds"
+EDITOR_DEFENSIVE_MODE = "treasury_bonds"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005
+EDITOR_EXPORT_FRONTEND_HISTORY = True
+EDITOR_FRONTEND_HISTORY_PATH = DEFAULT_FRONTEND_HISTORY_PATH
+EDITOR_FRONTEND_HISTORY_LIMIT = DEFAULT_FRONTEND_HISTORY_LIMIT
 
 
 def _coerce_date(value):
@@ -85,6 +91,114 @@ def _format_elapsed_time(elapsed_seconds):
     if minutes > 0:
         return f"{minutes}m {seconds}s"
     return f"{seconds}s"
+
+
+def _make_backtest_run_id(start_date, end_date, generated_at):
+    return f"{generated_at:%Y%m%dT%H%M%S}_{start_date:%Y%m%d}_{end_date:%Y%m%d}"
+
+
+def _compute_max_drawdown(values):
+    series = pd.Series(values, dtype="float64")
+    if series.empty:
+        return 0.0
+    running_peak = series.cummax()
+    drawdowns = (series / running_peak) - 1.0
+    return float(drawdowns.min() * 100.0)
+
+
+def _build_frontend_backtest_record(
+    results_df,
+    *,
+    generated_at,
+    start_date,
+    end_date,
+    initial_cash,
+    benchmark_symbol,
+    raw_rank_consideration_limit,
+    max_position_fraction,
+    defensive_mode,
+    defensive_symbol,
+    trade_fee_flat,
+    trade_fee_rate,
+):
+    latest = results_df.iloc[-1]
+    final_portfolio_value = float(latest["portfolio_value"])
+    final_benchmark_value = float(latest["sptm_value"])
+    final_reserve_percentage = float(latest["reserve_percentage"])
+    total_fees_paid = float(latest["fees_paid_cumulative"])
+    total_trades = int(latest["trade_count"])
+    strategy_run_count = int(results_df["strategy_ran"].sum())
+    portfolio_return = ((final_portfolio_value / initial_cash) - 1.0) * 100.0 if initial_cash else 0.0
+    benchmark_return = ((final_benchmark_value / initial_cash) - 1.0) * 100.0 if initial_cash else 0.0
+    alpha_percent = portfolio_return - benchmark_return
+    alpha_dollars = final_portfolio_value - final_benchmark_value
+    max_drawdown = _compute_max_drawdown(results_df["portfolio_value"])
+    reserve_label = "Treasury % of Portfolio" if defensive_mode == "treasury_bonds" else "Cash % of Portfolio"
+
+    return {
+        "id": _make_backtest_run_id(start_date, end_date, generated_at),
+        "generated_at": generated_at.isoformat(),
+        "period": {
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "label": f"{start_date.isoformat()} to {end_date.isoformat()}",
+        },
+        "summary": {
+            "initial_cash": float(initial_cash),
+            "benchmark_symbol": benchmark_symbol,
+            "final_portfolio_value": final_portfolio_value,
+            "final_benchmark_value": final_benchmark_value,
+            "portfolio_return_percent": portfolio_return,
+            "benchmark_return_percent": benchmark_return,
+            "alpha_percent": alpha_percent,
+            "alpha_dollars": alpha_dollars,
+            "final_reserve_percentage": final_reserve_percentage,
+            "reserve_label": reserve_label,
+            "positions_final": int(latest["positions"]),
+            "trade_count": total_trades,
+            "strategy_run_count": strategy_run_count,
+            "fees_paid_cumulative": total_fees_paid,
+            "max_drawdown_percent": max_drawdown,
+            "defensive_mode": defensive_mode,
+            "defensive_symbol": defensive_symbol if defensive_mode == "treasury_bonds" else "",
+            "raw_rank_consideration_limit": int(raw_rank_consideration_limit),
+            "max_position_fraction": float(max_position_fraction),
+            "trade_fee_flat": float(trade_fee_flat),
+            "trade_fee_rate": float(trade_fee_rate),
+            "elapsed_seconds": float(results_df.attrs.get("elapsed_seconds", 0.0)),
+            "elapsed_label": results_df.attrs.get("elapsed_label", ""),
+        },
+        "series": {
+            "dates": [value.isoformat() for value in results_df["date"]],
+            "portfolio_value": [round(float(value), 4) for value in results_df["portfolio_value"]],
+            "benchmark_value": [round(float(value), 4) for value in results_df["sptm_value"]],
+            "benchmark_200dma_value": [round(float(value), 4) for value in results_df["sptm_200dma_value"]],
+            "reserve_percentage": [round(float(value), 4) for value in results_df["reserve_percentage"]],
+        },
+    }
+
+
+def write_frontend_backtest_history(history_path, backtest_record, *, max_runs=DEFAULT_FRONTEND_HISTORY_LIMIT):
+    history_path = Path(history_path)
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {"updated_at": backtest_record["generated_at"], "runs": []}
+    if history_path.exists():
+        try:
+            payload = json.loads(history_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {"updated_at": backtest_record["generated_at"], "runs": []}
+
+    existing_runs = payload.get("runs", [])
+    deduped_runs = [run for run in existing_runs if run.get("id") != backtest_record["id"]]
+    deduped_runs.insert(0, backtest_record)
+    deduped_runs.sort(key=lambda run: run.get("generated_at", ""), reverse=True)
+
+    trimmed_payload = {
+        "updated_at": backtest_record["generated_at"],
+        "runs": deduped_runs[:max_runs],
+    }
+    history_path.write_text(json.dumps(trimmed_payload, indent=2), encoding="utf-8")
 
 
 class SimulatedDataClient:
@@ -514,6 +628,9 @@ def run_backtest(
     defensive_symbol="SGOV",
     trade_fee_flat=0.0,
     trade_fee_rate=0.0,
+    export_frontend_history=True,
+    frontend_history_path=DEFAULT_FRONTEND_HISTORY_PATH,
+    frontend_history_limit=DEFAULT_FRONTEND_HISTORY_LIMIT,
 ):
     timer_start = perf_counter()
     start_date = _coerce_date(start_date)
@@ -627,6 +744,29 @@ def run_backtest(
     results_df.attrs["elapsed_seconds"] = elapsed_seconds
     results_df.attrs["elapsed_label"] = elapsed_label
 
+    if export_frontend_history:
+        generated_at = dt.datetime.now(dt.timezone.utc)
+        backtest_record = _build_frontend_backtest_record(
+            results_df,
+            generated_at=generated_at,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            benchmark_symbol=benchmark_symbol,
+            raw_rank_consideration_limit=raw_rank_consideration_limit,
+            max_position_fraction=max_position_fraction,
+            defensive_mode=defensive_mode,
+            defensive_symbol=defensive_symbol,
+            trade_fee_flat=trade_fee_flat,
+            trade_fee_rate=trade_fee_rate,
+        )
+        write_frontend_backtest_history(
+            frontend_history_path,
+            backtest_record,
+            max_runs=frontend_history_limit,
+        )
+        print(f"Frontend backtest history updated at {frontend_history_path}")
+
     print(f"Backtest results saved to {results_path}")
     print(f"Backtest chart saved to {chart_path}")
     print(f"Backtest run time: {elapsed_label}")
@@ -651,6 +791,8 @@ def parse_args():
     parser.add_argument("--defensive-symbol", default="SGOV", help="Treasury ETF to use when defensive mode is treasury_bonds.")
     parser.add_argument("--trade-fee-flat", type=float, default=0.0, help="Flat USD fee applied to every trade in the backtest.")
     parser.add_argument("--trade-fee-rate", type=float, default=0.0, help="Proportional fee rate applied to trade notional in the backtest.")
+    parser.add_argument("--frontend-history-path", default=str(DEFAULT_FRONTEND_HISTORY_PATH), help="Optional JSON path for website-facing recent backtest history.")
+    parser.add_argument("--frontend-history-limit", type=int, default=DEFAULT_FRONTEND_HISTORY_LIMIT, help="Maximum number of recent backtest runs to keep for the frontend.")
     return parser.parse_args()
 
 
@@ -673,6 +815,9 @@ def run_backtest_from_editor_settings():
         defensive_symbol=EDITOR_DEFENSIVE_SYMBOL,
         trade_fee_flat=EDITOR_TRADE_FEE_FLAT,
         trade_fee_rate=EDITOR_TRADE_FEE_RATE,
+        export_frontend_history=EDITOR_EXPORT_FRONTEND_HISTORY,
+        frontend_history_path=EDITOR_FRONTEND_HISTORY_PATH,
+        frontend_history_limit=EDITOR_FRONTEND_HISTORY_LIMIT,
     )
 
 
@@ -698,6 +843,8 @@ if __name__ == "__main__":
                 defensive_symbol=args.defensive_symbol,
                 trade_fee_flat=args.trade_fee_flat,
                 trade_fee_rate=args.trade_fee_rate,
+                frontend_history_path=args.frontend_history_path,
+                frontend_history_limit=args.frontend_history_limit,
             )
     except Exception as exc:
         print(f"Backtest run failed: {exc}", file=sys.stderr)
