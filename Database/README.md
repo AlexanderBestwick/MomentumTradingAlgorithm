@@ -1,6 +1,8 @@
 # Backtest Database
 
-This folder holds the SQLite storage layer for backtest results.
+This folder now holds a legacy database storage layer for backtest and live results.
+
+The current default website flow publishes JSON files directly for the frontend instead of writing to a database.
 
 ## Files
 

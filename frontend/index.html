@@ -132,7 +132,7 @@
                                 aria-label="Selected backtest chart"
                             ></svg>
                             <div class="chart-empty" id="chart-empty">
-                                Run a backtest to populate <code>frontend/data/backtest-history.json</code>.
+                                Run a backtest to populate <code>frontend/data/backtests/index.json</code>.
                             </div>
                         </div>
                         <div class="chart-legend" id="chart-legend"></div>
@@ -148,7 +148,7 @@
                         </div>
                     </div>
                     <ul class="action-list">
-                        <li>Each backtest now updates <code>frontend/data/backtest-history.json</code>.</li>
+                        <li>Each backtest now updates <code>frontend/data/backtests/index.json</code> and a per-run JSON detail file.</li>
                         <li>Later swap the static JSON fetch for a backend API when you deploy.</li>
                         <li>Add a live-run error feed once you start storing failures centrally.</li>
                         <li>Later migrate this layout into Next.js when Node is installed.</li>

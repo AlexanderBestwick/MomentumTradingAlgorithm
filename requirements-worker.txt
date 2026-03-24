@@ -1,8 +1,8 @@
 alpaca-py
+boto3
 matplotlib
 numpy
 pandas
-psycopg[binary]
 pytz
 scipy
 TA-Lib

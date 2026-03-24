@@ -8,9 +8,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from Database.LiveRunStore import DEFAULT_LIVE_DATABASE_PATH, save_live_run_record
 from Config import get_alpaca_credentials
 from FullRun import RunAll, build_live_clients
+from SiteData.Publisher import (
+    DEFAULT_LIVE_HISTORY_LIMIT,
+    DEFAULT_SITE_DATA_ROOT,
+    build_live_run_record,
+    publish_live_run,
+    upload_site_data_to_s3,
+)
 
 
 def _get_bool_env(name, default):
@@ -66,9 +72,13 @@ def main():
     max_position_fraction = _get_float_env("MAX_POSITION_FRACTION", 0.10)
     save_outputs = _get_bool_env("SAVE_OUTPUTS", True)
     enforce_live_safeguards = _get_bool_env("ENFORCE_LIVE_SAFEGUARDS", True)
-    export_live_database = _get_bool_env("EXPORT_LIVE_DATABASE", True)
-    live_database_url = os.getenv("LIVE_DATABASE_URL") or os.getenv("DATABASE_URL")
-    live_database_path = os.getenv("LIVE_DATABASE_PATH", str(DEFAULT_LIVE_DATABASE_PATH))
+    export_site_data = _get_bool_env("EXPORT_SITE_DATA", True)
+    site_data_root = os.getenv("SITE_DATA_ROOT", str(DEFAULT_SITE_DATA_ROOT))
+    live_history_limit = _get_int_env("LIVE_HISTORY_LIMIT", DEFAULT_LIVE_HISTORY_LIMIT)
+    s3_publish_enabled = _get_bool_env("S3_PUBLISH_ENABLED", False)
+    s3_bucket_name = os.getenv("S3_BUCKET_NAME")
+    s3_prefix = os.getenv("S3_PREFIX", "")
+    aws_region = os.getenv("AWS_REGION")
     live_run_source = os.getenv("LIVE_RUN_SOURCE", "ecs_worker")
 
     trading_client, data_client = build_live_clients()
@@ -95,37 +105,61 @@ def main():
             enforce_live_safeguards=enforce_live_safeguards,
         )
     except Exception as exc:
-        if export_live_database:
-            save_live_run_record(
+        if export_site_data:
+            live_run_record = build_live_run_record(
                 generated_at=generated_at,
                 environment=credentials.environment,
                 trigger_source=live_run_source,
-                database_path=live_database_path,
-                database_url=live_database_url,
                 initial_account=initial_account,
                 final_account=_snapshot_account(trading_client),
                 final_positions=_snapshot_positions(trading_client),
                 error_detail=str(exc),
             )
-            print(f"Live run failure saved to database at {live_database_url or live_database_path}")
+            published_site_data = publish_live_run(
+                live_run_record,
+                site_data_root=site_data_root,
+                max_runs=live_history_limit,
+            )
+            print(f"Published failed live run site data at {site_data_root}")
+            if s3_publish_enabled:
+                uploaded_paths = upload_site_data_to_s3(
+                    published_site_data["paths"],
+                    site_data_root=site_data_root,
+                    bucket_name=s3_bucket_name,
+                    prefix=s3_prefix,
+                    aws_region=aws_region,
+                )
+                print(f"Uploaded {len(uploaded_paths)} failed live-run files to s3://{s3_bucket_name}")
         raise
 
     final_account = _snapshot_account(trading_client)
     final_positions = _snapshot_positions(trading_client)
 
-    if export_live_database:
-        run_id = save_live_run_record(
+    if export_site_data:
+        live_run_record = build_live_run_record(
             result=result,
             generated_at=generated_at,
             environment=credentials.environment,
             trigger_source=live_run_source,
-            database_path=live_database_path,
-            database_url=live_database_url,
             initial_account=initial_account,
             final_account=final_account,
             final_positions=final_positions,
         )
-        print(f"Live run saved to database at {live_database_url or live_database_path} with run_id={run_id}")
+        published_site_data = publish_live_run(
+            live_run_record,
+            site_data_root=site_data_root,
+            max_runs=live_history_limit,
+        )
+        print(f"Published live run site data at {site_data_root} with run_id={live_run_record['id']}")
+        if s3_publish_enabled:
+            uploaded_paths = upload_site_data_to_s3(
+                published_site_data["paths"],
+                site_data_root=site_data_root,
+                bucket_name=s3_bucket_name,
+                prefix=s3_prefix,
+                aws_region=aws_region,
+            )
+            print(f"Uploaded {len(uploaded_paths)} live-run files to s3://{s3_bucket_name}")
 
     print(
         "Momentum worker completed: "

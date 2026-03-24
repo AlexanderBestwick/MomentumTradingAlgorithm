@@ -1,6 +1,5 @@
 import argparse
 import datetime as dt
-import json
 import os
 from pathlib import Path
 import sys
@@ -15,11 +14,13 @@ from matplotlib.transforms import blended_transform_factory
 import pandas as pd
 
 from Config import get_alpaca_credentials, load_local_env
-from Database.BacktestStore import (
-    DEFAULT_BACKTEST_DATABASE_PATH,
-    save_backtest_record,
-)
 from FullRun import RunAll
+from SiteData.Publisher import (
+    DEFAULT_BACKTEST_HISTORY_LIMIT,
+    DEFAULT_SITE_DATA_ROOT,
+    publish_backtest_run,
+    upload_site_data_to_s3,
+)
 from Functions.TradingDays import calendar_days_for_trading_window
 from ViableStockList import load_snp1500_symbols
 
@@ -28,16 +29,18 @@ load_local_env()
 
 DEFAULT_RESULTS_PATH = Path("Data/BacktestResults.csv")
 DEFAULT_CHART_PATH = Path("Data/BacktestResults.png")
-DEFAULT_DATABASE_PATH = DEFAULT_BACKTEST_DATABASE_PATH
-DEFAULT_DATABASE_URL = os.getenv("DATABASE_URL")
-DEFAULT_FRONTEND_HISTORY_PATH = Path("frontend/data/backtest-history.json")
-DEFAULT_FRONTEND_HISTORY_LIMIT = 6
+DEFAULT_SITE_DATA_PATH = DEFAULT_SITE_DATA_ROOT
+DEFAULT_SITE_DATA_HISTORY_LIMIT = DEFAULT_BACKTEST_HISTORY_LIMIT
+DEFAULT_S3_PUBLISH_ENABLED = os.getenv("S3_PUBLISH_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+DEFAULT_S3_PREFIX = os.getenv("S3_PREFIX", "")
+DEFAULT_AWS_REGION = os.getenv("AWS_REGION")
 
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2019-01-01"
-EDITOR_END_DATE = "2024-07-01"
+EDITOR_START_DATE = "2020-02-01"
+EDITOR_END_DATE = "2020-05-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")
@@ -53,12 +56,13 @@ EDITOR_DEFENSIVE_MODE = "treasury_bonds"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005
-EDITOR_EXPORT_DATABASE = True
-EDITOR_DATABASE_PATH = DEFAULT_DATABASE_PATH
-EDITOR_DATABASE_URL = DEFAULT_DATABASE_URL
-EDITOR_EXPORT_FRONTEND_HISTORY = True
-EDITOR_FRONTEND_HISTORY_PATH = DEFAULT_FRONTEND_HISTORY_PATH
-EDITOR_FRONTEND_HISTORY_LIMIT = DEFAULT_FRONTEND_HISTORY_LIMIT
+EDITOR_EXPORT_SITE_DATA = True
+EDITOR_SITE_DATA_PATH = DEFAULT_SITE_DATA_PATH
+EDITOR_SITE_DATA_HISTORY_LIMIT = DEFAULT_SITE_DATA_HISTORY_LIMIT
+EDITOR_S3_PUBLISH_ENABLED = DEFAULT_S3_PUBLISH_ENABLED
+EDITOR_S3_BUCKET_NAME = DEFAULT_S3_BUCKET_NAME
+EDITOR_S3_PREFIX = DEFAULT_S3_PREFIX
+EDITOR_AWS_REGION = DEFAULT_AWS_REGION
 
 
 def _coerce_date(value):
@@ -188,29 +192,6 @@ def _build_backtest_record(
             "reserve_percentage": [round(float(value), 4) for value in results_df["reserve_percentage"]],
         },
     }
-
-
-def write_frontend_backtest_history(history_path, backtest_record, *, max_runs=DEFAULT_FRONTEND_HISTORY_LIMIT):
-    history_path = Path(history_path)
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-
-    payload = {"updated_at": backtest_record["generated_at"], "runs": []}
-    if history_path.exists():
-        try:
-            payload = json.loads(history_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            payload = {"updated_at": backtest_record["generated_at"], "runs": []}
-
-    existing_runs = payload.get("runs", [])
-    deduped_runs = [run for run in existing_runs if run.get("id") != backtest_record["id"]]
-    deduped_runs.insert(0, backtest_record)
-    deduped_runs.sort(key=lambda run: run.get("generated_at", ""), reverse=True)
-
-    trimmed_payload = {
-        "updated_at": backtest_record["generated_at"],
-        "runs": deduped_runs[:max_runs],
-    }
-    history_path.write_text(json.dumps(trimmed_payload, indent=2), encoding="utf-8")
 
 
 class SimulatedDataClient:
@@ -640,12 +621,13 @@ def run_backtest(
     defensive_symbol="SGOV",
     trade_fee_flat=0.0,
     trade_fee_rate=0.0,
-    export_database=True,
-    database_path=DEFAULT_DATABASE_PATH,
-    database_url=DEFAULT_DATABASE_URL,
-    export_frontend_history=True,
-    frontend_history_path=DEFAULT_FRONTEND_HISTORY_PATH,
-    frontend_history_limit=DEFAULT_FRONTEND_HISTORY_LIMIT,
+    export_site_data=True,
+    site_data_path=DEFAULT_SITE_DATA_PATH,
+    site_data_history_limit=DEFAULT_SITE_DATA_HISTORY_LIMIT,
+    s3_publish_enabled=DEFAULT_S3_PUBLISH_ENABLED,
+    s3_bucket_name=DEFAULT_S3_BUCKET_NAME,
+    s3_prefix=DEFAULT_S3_PREFIX,
+    aws_region=DEFAULT_AWS_REGION,
 ):
     timer_start = perf_counter()
     start_date = _coerce_date(start_date)
@@ -760,7 +742,8 @@ def run_backtest(
     results_df.attrs["elapsed_label"] = elapsed_label
 
     backtest_record = None
-    if export_database or export_frontend_history:
+    published_site_data = None
+    if export_site_data:
         generated_at = dt.datetime.now(dt.timezone.utc)
         backtest_record = _build_backtest_record(
             results_df,
@@ -777,25 +760,28 @@ def run_backtest(
             trade_fee_rate=trade_fee_rate,
         )
 
-    if export_database and backtest_record is not None:
-        save_backtest_record(
+    if export_site_data and backtest_record is not None:
+        published_site_data = publish_backtest_run(
             backtest_record,
-            results_df,
-            database_path=database_path,
-            database_url=database_url,
-            results_path=results_path,
+            site_data_root=site_data_path,
             chart_path=chart_path,
+            results_path=results_path,
+            max_runs=site_data_history_limit,
         )
-        database_target = database_url or database_path
-        print(f"Backtest database updated at {database_target}")
+        print(f"Published backtest site data at {site_data_path}")
 
-    if export_frontend_history:
-        write_frontend_backtest_history(
-            frontend_history_path,
-            backtest_record,
-            max_runs=frontend_history_limit,
+    if s3_publish_enabled:
+        if not published_site_data:
+            raise RuntimeError("S3 publishing is enabled, but no site data was generated to upload.")
+
+        uploaded_paths = upload_site_data_to_s3(
+            published_site_data["paths"],
+            site_data_root=site_data_path,
+            bucket_name=s3_bucket_name,
+            prefix=s3_prefix,
+            aws_region=aws_region,
         )
-        print(f"Frontend backtest history updated at {frontend_history_path}")
+        print(f"Uploaded {len(uploaded_paths)} published backtest files to s3://{s3_bucket_name}")
 
     print(f"Backtest results saved to {results_path}")
     print(f"Backtest chart saved to {chart_path}")
@@ -821,10 +807,12 @@ def parse_args():
     parser.add_argument("--defensive-symbol", default="SGOV", help="Treasury ETF to use when defensive mode is treasury_bonds.")
     parser.add_argument("--trade-fee-flat", type=float, default=0.0, help="Flat USD fee applied to every trade in the backtest.")
     parser.add_argument("--trade-fee-rate", type=float, default=0.0, help="Proportional fee rate applied to trade notional in the backtest.")
-    parser.add_argument("--database-path", default=str(DEFAULT_DATABASE_PATH), help="SQLite database path for storing backtest runs and time-series results.")
-    parser.add_argument("--database-url", default=DEFAULT_DATABASE_URL, help="Optional database URL. Use postgresql://... to write directly to AWS RDS.")
-    parser.add_argument("--frontend-history-path", default=str(DEFAULT_FRONTEND_HISTORY_PATH), help="Optional JSON path for website-facing recent backtest history.")
-    parser.add_argument("--frontend-history-limit", type=int, default=DEFAULT_FRONTEND_HISTORY_LIMIT, help="Maximum number of recent backtest runs to keep for the frontend.")
+    parser.add_argument("--site-data-path", default=str(DEFAULT_SITE_DATA_PATH), help="Folder for website-facing JSON and artifact output.")
+    parser.add_argument("--site-data-history-limit", type=int, default=DEFAULT_SITE_DATA_HISTORY_LIMIT, help="Maximum number of recent backtest runs to keep in the published site data.")
+    parser.add_argument("--s3-publish-enabled", action="store_true", default=DEFAULT_S3_PUBLISH_ENABLED, help="Upload the published site data files to S3 after each run.")
+    parser.add_argument("--s3-bucket-name", default=DEFAULT_S3_BUCKET_NAME, help="S3 bucket to receive published site data.")
+    parser.add_argument("--s3-prefix", default=DEFAULT_S3_PREFIX, help="Optional S3 key prefix for published site data.")
+    parser.add_argument("--aws-region", default=DEFAULT_AWS_REGION, help="AWS region for the S3 upload client.")
     return parser.parse_args()
 
 
@@ -847,12 +835,13 @@ def run_backtest_from_editor_settings():
         defensive_symbol=EDITOR_DEFENSIVE_SYMBOL,
         trade_fee_flat=EDITOR_TRADE_FEE_FLAT,
         trade_fee_rate=EDITOR_TRADE_FEE_RATE,
-        export_database=EDITOR_EXPORT_DATABASE,
-        database_path=EDITOR_DATABASE_PATH,
-        database_url=EDITOR_DATABASE_URL,
-        export_frontend_history=EDITOR_EXPORT_FRONTEND_HISTORY,
-        frontend_history_path=EDITOR_FRONTEND_HISTORY_PATH,
-        frontend_history_limit=EDITOR_FRONTEND_HISTORY_LIMIT,
+        export_site_data=EDITOR_EXPORT_SITE_DATA,
+        site_data_path=EDITOR_SITE_DATA_PATH,
+        site_data_history_limit=EDITOR_SITE_DATA_HISTORY_LIMIT,
+        s3_publish_enabled=EDITOR_S3_PUBLISH_ENABLED,
+        s3_bucket_name=EDITOR_S3_BUCKET_NAME,
+        s3_prefix=EDITOR_S3_PREFIX,
+        aws_region=EDITOR_AWS_REGION,
     )
 
 
@@ -878,10 +867,12 @@ if __name__ == "__main__":
                 defensive_symbol=args.defensive_symbol,
                 trade_fee_flat=args.trade_fee_flat,
                 trade_fee_rate=args.trade_fee_rate,
-                database_path=args.database_path,
-                database_url=args.database_url,
-                frontend_history_path=args.frontend_history_path,
-                frontend_history_limit=args.frontend_history_limit,
+                site_data_path=args.site_data_path,
+                site_data_history_limit=args.site_data_history_limit,
+                s3_publish_enabled=args.s3_publish_enabled,
+                s3_bucket_name=args.s3_bucket_name,
+                s3_prefix=args.s3_prefix,
+                aws_region=args.aws_region,
             )
     except Exception as exc:
         print(f"Backtest run failed: {exc}", file=sys.stderr)

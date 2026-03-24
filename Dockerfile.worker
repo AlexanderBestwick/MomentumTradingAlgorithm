@@ -23,7 +23,7 @@ COPY ViableStockList.py ./
 COPY LinearRegression.py ./
 COPY PortfolioBalancer.py ./
 COPY RiskBalancer.py ./
-COPY Database ./Database
+COPY SiteData ./SiteData
 COPY Functions ./Functions
 COPY Data/holdings-daily-us-en-sptm.csv ./Data/holdings-daily-us-en-sptm.csv
 COPY worker ./worker

@@ -36,9 +36,10 @@ http://localhost:8000/frontend/
 
 Run [Backtesting.py](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/Backtesting.py) and it will update:
 
-- [frontend/data/backtest-history.json](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/frontend/data/backtest-history.json)
+- [frontend/data/backtests/index.json](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/frontend/data/backtests/index.json)
+- [frontend/data/backtests/runs/](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/frontend/data/backtests/runs)
 
-The frontend reads that file automatically.
+The frontend reads the index and per-run detail files automatically.
 
 For display tweaks, edit:
 

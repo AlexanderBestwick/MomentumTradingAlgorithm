@@ -1,8 +1,9 @@
-const HISTORY_URL = "./data/backtest-history.json";
+const HISTORY_URL = "./data/backtests/index.json";
 
 const state = {
     history: null,
-    selectedRunId: null
+    selectedRunId: null,
+    runDetails: {}
 };
 
 function formatCurrency(value) {
@@ -55,7 +56,8 @@ function getSelectedRun() {
         return null;
     }
 
-    return state.history.runs.find((run) => run.id === state.selectedRunId) ?? state.history.runs[0];
+    const selectedSummary = state.history.runs.find((run) => run.id === state.selectedRunId) ?? state.history.runs[0];
+    return state.runDetails[selectedSummary.id] ?? selectedSummary;
 }
 
 function setHeroStatus(label, className) {
@@ -175,9 +177,8 @@ function renderRunHistory(runs) {
             <td class="${toneClass(summary.alpha_percent)}">${formatPercent(summary.alpha_percent)}</td>
             <td>${summary.trade_count}</td>
         `;
-        row.addEventListener("click", () => {
-            state.selectedRunId = run.id;
-            renderDashboard();
+        row.addEventListener("click", async () => {
+            await selectRun(run.id);
         });
         body.appendChild(row);
     });
@@ -200,7 +201,7 @@ function renderErrors(run, loadError = null) {
         items.push({
             severity: "warning",
             title: "No backtest history found yet",
-            message: "Run Backtesting.py once and it will populate frontend/data/backtest-history.json for this dashboard.",
+            message: "Run Backtesting.py once and it will populate frontend/data/backtests/index.json and the per-run detail files for this dashboard.",
             timestamp: "Waiting for the first exported run."
         });
     } else {
@@ -213,7 +214,7 @@ function renderErrors(run, loadError = null) {
         items.push({
             severity: "warning",
             title: "Static frontend mode",
-            message: "This page is currently reading exported JSON files, not a live backend API. That makes local testing simple, but it will only update after each backtest run.",
+            message: "This page is currently reading published JSON files, not a live backend API. That keeps the site cheap and simple, but it only updates after each published run.",
             timestamp: "Good for early iteration."
         });
     }
@@ -306,7 +307,7 @@ function renderChart(run) {
     const empty = document.getElementById("chart-empty");
     svg.innerHTML = "";
 
-    if (!run) {
+    if (!run || !run.series) {
         empty.classList.remove("is-hidden");
         return;
     }
@@ -380,6 +381,36 @@ function renderDashboard(loadError = null) {
     renderChart(run);
 }
 
+async function ensureRunDetail(runId) {
+    if (!runId || state.runDetails[runId]) {
+        return state.runDetails[runId] ?? null;
+    }
+
+    const runSummary = state.history?.runs?.find((run) => run.id === runId);
+    if (!runSummary || !runSummary.detail_path) {
+        return runSummary ?? null;
+    }
+
+    const response = await fetch(runSummary.detail_path, { cache: "no-store" });
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status} while loading ${runSummary.detail_path}`);
+    }
+
+    const payload = await response.json();
+    state.runDetails[runId] = payload;
+    return payload;
+}
+
+async function selectRun(runId) {
+    state.selectedRunId = runId;
+    try {
+        await ensureRunDetail(runId);
+        renderDashboard();
+    } catch (error) {
+        renderDashboard(`Failed to load run details for ${runId}: ${error.message}`);
+    }
+}
+
 async function loadBacktestHistory() {
     try {
         const response = await fetch(HISTORY_URL, { cache: "no-store" });
@@ -390,14 +421,18 @@ async function loadBacktestHistory() {
         const payload = await response.json();
         state.history = payload;
         state.selectedRunId = payload.runs?.[0]?.id ?? null;
+        if (state.selectedRunId) {
+            await ensureRunDetail(state.selectedRunId);
+        }
         renderDashboard();
     } catch (error) {
         state.history = { updated_at: null, runs: [] };
         state.selectedRunId = null;
+        state.runDetails = {};
 
         let message = error.message;
         if (window.location.protocol === "file:") {
-            message = "This page is being opened directly from the filesystem. Start a small local server such as `python -m http.server 8000` and open `/frontend/` so the browser can fetch backtest-history.json.";
+            message = "This page is being opened directly from the filesystem. Start a small local server such as `python -m http.server 8000` and open `/frontend/` so the browser can fetch the published JSON files.";
         }
 
         renderDashboard(message);
