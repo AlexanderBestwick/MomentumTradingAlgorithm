@@ -2,5 +2,7 @@ alpaca-py
 matplotlib
 numpy
 pandas
+psycopg[binary]
+pytz
 scipy
 TA-Lib

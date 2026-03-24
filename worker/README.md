@@ -40,6 +40,10 @@ Optional worker settings:
 - `MAX_POSITION_FRACTION=0.10`
 - `SAVE_OUTPUTS=true`
 - `ENFORCE_LIVE_SAFEGUARDS=true`
+- `EXPORT_LIVE_DATABASE=true`
+- `LIVE_DATABASE_URL=postgresql://user:password@host:5432/dbname?sslmode=require`
+- `LIVE_DATABASE_PATH=Data/backtest_results.db`
+- `LIVE_RUN_SOURCE=ecs_worker`
 
 ## AWS structure
 
@@ -63,3 +67,7 @@ Recommended first deployment shape:
 ## Important note
 
 The worker image includes [Data/holdings-daily-us-en-sptm.csv](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/Data/holdings-daily-us-en-sptm.csv), but it intentionally excludes the rest of `Data/` from the Docker build context.
+
+Live run results can now also be written directly to PostgreSQL on AWS RDS by setting `LIVE_DATABASE_URL`.
+
+If you stay on SQLite instead, the database path must live on persistent storage if you want results to survive after the task exits. The simplest later fallback option is mounting EFS and pointing `LIVE_DATABASE_PATH` at that mounted path.

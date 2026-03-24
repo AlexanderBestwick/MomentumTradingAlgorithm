@@ -1,6 +1,7 @@
 import argparse
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -13,22 +14,30 @@ from matplotlib.ticker import PercentFormatter
 from matplotlib.transforms import blended_transform_factory
 import pandas as pd
 
-from Config import get_alpaca_credentials
+from Config import get_alpaca_credentials, load_local_env
+from Database.BacktestStore import (
+    DEFAULT_BACKTEST_DATABASE_PATH,
+    save_backtest_record,
+)
 from FullRun import RunAll
 from Functions.TradingDays import calendar_days_for_trading_window
 from ViableStockList import load_snp1500_symbols
 
 
+load_local_env()
+
 DEFAULT_RESULTS_PATH = Path("Data/BacktestResults.csv")
 DEFAULT_CHART_PATH = Path("Data/BacktestResults.png")
+DEFAULT_DATABASE_PATH = DEFAULT_BACKTEST_DATABASE_PATH
+DEFAULT_DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_FRONTEND_HISTORY_PATH = Path("frontend/data/backtest-history.json")
 DEFAULT_FRONTEND_HISTORY_LIMIT = 6
 
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2019-04-01"
-EDITOR_END_DATE = "2019-07-01"
+EDITOR_START_DATE = "2019-01-01"
+EDITOR_END_DATE = "2024-07-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")
@@ -44,6 +53,9 @@ EDITOR_DEFENSIVE_MODE = "treasury_bonds"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005
+EDITOR_EXPORT_DATABASE = True
+EDITOR_DATABASE_PATH = DEFAULT_DATABASE_PATH
+EDITOR_DATABASE_URL = DEFAULT_DATABASE_URL
 EDITOR_EXPORT_FRONTEND_HISTORY = True
 EDITOR_FRONTEND_HISTORY_PATH = DEFAULT_FRONTEND_HISTORY_PATH
 EDITOR_FRONTEND_HISTORY_LIMIT = DEFAULT_FRONTEND_HISTORY_LIMIT
@@ -106,7 +118,7 @@ def _compute_max_drawdown(values):
     return float(drawdowns.min() * 100.0)
 
 
-def _build_frontend_backtest_record(
+def _build_backtest_record(
     results_df,
     *,
     generated_at,
@@ -628,6 +640,9 @@ def run_backtest(
     defensive_symbol="SGOV",
     trade_fee_flat=0.0,
     trade_fee_rate=0.0,
+    export_database=True,
+    database_path=DEFAULT_DATABASE_PATH,
+    database_url=DEFAULT_DATABASE_URL,
     export_frontend_history=True,
     frontend_history_path=DEFAULT_FRONTEND_HISTORY_PATH,
     frontend_history_limit=DEFAULT_FRONTEND_HISTORY_LIMIT,
@@ -744,9 +759,10 @@ def run_backtest(
     results_df.attrs["elapsed_seconds"] = elapsed_seconds
     results_df.attrs["elapsed_label"] = elapsed_label
 
-    if export_frontend_history:
+    backtest_record = None
+    if export_database or export_frontend_history:
         generated_at = dt.datetime.now(dt.timezone.utc)
-        backtest_record = _build_frontend_backtest_record(
+        backtest_record = _build_backtest_record(
             results_df,
             generated_at=generated_at,
             start_date=start_date,
@@ -760,6 +776,20 @@ def run_backtest(
             trade_fee_flat=trade_fee_flat,
             trade_fee_rate=trade_fee_rate,
         )
+
+    if export_database and backtest_record is not None:
+        save_backtest_record(
+            backtest_record,
+            results_df,
+            database_path=database_path,
+            database_url=database_url,
+            results_path=results_path,
+            chart_path=chart_path,
+        )
+        database_target = database_url or database_path
+        print(f"Backtest database updated at {database_target}")
+
+    if export_frontend_history:
         write_frontend_backtest_history(
             frontend_history_path,
             backtest_record,
@@ -791,6 +821,8 @@ def parse_args():
     parser.add_argument("--defensive-symbol", default="SGOV", help="Treasury ETF to use when defensive mode is treasury_bonds.")
     parser.add_argument("--trade-fee-flat", type=float, default=0.0, help="Flat USD fee applied to every trade in the backtest.")
     parser.add_argument("--trade-fee-rate", type=float, default=0.0, help="Proportional fee rate applied to trade notional in the backtest.")
+    parser.add_argument("--database-path", default=str(DEFAULT_DATABASE_PATH), help="SQLite database path for storing backtest runs and time-series results.")
+    parser.add_argument("--database-url", default=DEFAULT_DATABASE_URL, help="Optional database URL. Use postgresql://... to write directly to AWS RDS.")
     parser.add_argument("--frontend-history-path", default=str(DEFAULT_FRONTEND_HISTORY_PATH), help="Optional JSON path for website-facing recent backtest history.")
     parser.add_argument("--frontend-history-limit", type=int, default=DEFAULT_FRONTEND_HISTORY_LIMIT, help="Maximum number of recent backtest runs to keep for the frontend.")
     return parser.parse_args()
@@ -815,6 +847,9 @@ def run_backtest_from_editor_settings():
         defensive_symbol=EDITOR_DEFENSIVE_SYMBOL,
         trade_fee_flat=EDITOR_TRADE_FEE_FLAT,
         trade_fee_rate=EDITOR_TRADE_FEE_RATE,
+        export_database=EDITOR_EXPORT_DATABASE,
+        database_path=EDITOR_DATABASE_PATH,
+        database_url=EDITOR_DATABASE_URL,
         export_frontend_history=EDITOR_EXPORT_FRONTEND_HISTORY,
         frontend_history_path=EDITOR_FRONTEND_HISTORY_PATH,
         frontend_history_limit=EDITOR_FRONTEND_HISTORY_LIMIT,
@@ -843,6 +878,8 @@ if __name__ == "__main__":
                 defensive_symbol=args.defensive_symbol,
                 trade_fee_flat=args.trade_fee_flat,
                 trade_fee_rate=args.trade_fee_rate,
+                database_path=args.database_path,
+                database_url=args.database_url,
                 frontend_history_path=args.frontend_history_path,
                 frontend_history_limit=args.frontend_history_limit,
             )
