@@ -18,6 +18,7 @@ from FullRun import RunAll
 from SiteData.Publisher import (
     DEFAULT_BACKTEST_HISTORY_LIMIT,
     DEFAULT_SITE_DATA_ROOT,
+    publish_error_event,
     publish_backtest_run,
     upload_site_data_to_s3,
 )
@@ -39,8 +40,8 @@ DEFAULT_AWS_REGION = os.getenv("AWS_REGION")
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2020-02-01"
-EDITOR_END_DATE = "2020-05-01"
+EDITOR_START_DATE = "2017-02-01"
+EDITOR_END_DATE = "2026-02-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")
@@ -158,6 +159,16 @@ def _build_backtest_record(
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
             "label": f"{start_date.isoformat()} to {end_date.isoformat()}",
+        },
+        "settings": {
+            "initial_cash": float(initial_cash),
+            "benchmark_symbol": benchmark_symbol,
+            "raw_rank_consideration_limit": int(raw_rank_consideration_limit),
+            "max_position_fraction": float(max_position_fraction),
+            "defensive_mode": defensive_mode,
+            "defensive_symbol": defensive_symbol if defensive_mode == "treasury_bonds" else "",
+            "trade_fee_flat": float(trade_fee_flat),
+            "trade_fee_rate": float(trade_fee_rate),
         },
         "summary": {
             "initial_cash": float(initial_cash),
@@ -846,6 +857,7 @@ def run_backtest_from_editor_settings():
 
 
 if __name__ == "__main__":
+    args = None
     try:
         if RUN_WITH_EDITOR_SETTINGS:
             run_backtest_from_editor_settings()
@@ -875,5 +887,57 @@ if __name__ == "__main__":
                 aws_region=args.aws_region,
             )
     except Exception as exc:
+        try:
+            if RUN_WITH_EDITOR_SETTINGS and EDITOR_EXPORT_SITE_DATA:
+                generated_at = dt.datetime.now(dt.timezone.utc)
+                published_error_data = publish_error_event(
+                    generated_at=generated_at,
+                    source="backtest_runner",
+                    category="backtest_failed",
+                    title="Backtest run failed",
+                    message=str(exc),
+                    site_data_root=EDITOR_SITE_DATA_PATH,
+                    context={
+                        "period_start": EDITOR_START_DATE,
+                        "period_end": EDITOR_END_DATE,
+                        "defensive_mode": EDITOR_DEFENSIVE_MODE,
+                        "raw_rank_consideration_limit": EDITOR_RAW_RANK_CONSIDERATION_LIMIT,
+                    },
+                )
+                if EDITOR_S3_PUBLISH_ENABLED:
+                    upload_site_data_to_s3(
+                        published_error_data["paths"],
+                        site_data_root=EDITOR_SITE_DATA_PATH,
+                        bucket_name=EDITOR_S3_BUCKET_NAME,
+                        prefix=EDITOR_S3_PREFIX,
+                        aws_region=EDITOR_AWS_REGION,
+                    )
+            elif args is not None and args.site_data_path:
+                generated_at = dt.datetime.now(dt.timezone.utc)
+                published_error_data = publish_error_event(
+                    generated_at=generated_at,
+                    source="backtest_runner",
+                    category="backtest_failed",
+                    title="Backtest run failed",
+                    message=str(exc),
+                    site_data_root=args.site_data_path,
+                    context={
+                        "period_start": args.start,
+                        "period_end": args.end,
+                        "defensive_mode": args.defensive_mode,
+                        "raw_rank_consideration_limit": args.raw_rank_consideration_limit,
+                    },
+                )
+                if args.s3_publish_enabled:
+                    upload_site_data_to_s3(
+                        published_error_data["paths"],
+                        site_data_root=args.site_data_path,
+                        bucket_name=args.s3_bucket_name,
+                        prefix=args.s3_prefix,
+                        aws_region=args.aws_region,
+                    )
+        except Exception as publish_exc:
+            print(f"Backtest error publishing failed: {publish_exc}", file=sys.stderr)
+
         print(f"Backtest run failed: {exc}", file=sys.stderr)
         raise

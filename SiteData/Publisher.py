@@ -8,6 +8,7 @@ from pathlib import Path
 DEFAULT_SITE_DATA_ROOT = Path("frontend/data")
 DEFAULT_BACKTEST_HISTORY_LIMIT = 12
 DEFAULT_LIVE_HISTORY_LIMIT = 30
+DEFAULT_ERROR_HISTORY_LIMIT = 40
 SCHEMA_VERSION = 1
 
 
@@ -213,6 +214,9 @@ def build_live_run_record(
     final_positions,
     result=None,
     error_detail=None,
+    portfolio_history=None,
+    recent_orders=None,
+    total_fees_paid=None,
 ):
     generated_at_iso = generated_at.isoformat() if isinstance(generated_at, datetime) else str(generated_at)
     run_date = None
@@ -224,6 +228,13 @@ def build_live_run_record(
         "underrisked": [],
         "capped_sells": [],
         "defensive_buys": [],
+    }
+    settings = {
+        "defensive_mode": "cash",
+        "defensive_symbol": "",
+        "raw_rank_consideration_limit": None,
+        "max_position_fraction": None,
+        "is_risk_rebalance_day": False,
     }
     summary = {
         "market_health": None,
@@ -241,6 +252,14 @@ def build_live_run_record(
         "defensive_symbol": "",
         "raw_rank_consideration_limit": None,
         "max_position_fraction": None,
+        "final_portfolio_value": float(final_account["portfolio_value"]),
+        "final_cash": float(final_account["cash"]),
+        "reserve_percentage": (
+            (float(final_account["cash"]) / float(final_account["portfolio_value"])) * 100.0
+            if float(final_account["portfolio_value"])
+            else 0.0
+        ),
+        "total_fees_paid": total_fees_paid,
     }
 
     if result is not None:
@@ -253,6 +272,15 @@ def build_live_run_record(
             "capped_sells": _normalize_symbol_list(result.get("capped_sells")),
             "defensive_buys": _normalize_symbol_list(result.get("defensive_buys")),
         }
+        settings.update(
+            {
+                "defensive_mode": result.get("defensive_mode", "cash"),
+                "defensive_symbol": result.get("defensive_symbol", ""),
+                "raw_rank_consideration_limit": result.get("raw_rank_consideration_limit"),
+                "max_position_fraction": result.get("max_position_fraction"),
+                "is_risk_rebalance_day": bool(result.get("is_risk_rebalance_day")),
+            }
+        )
         summary.update(
             {
                 "market_health": bool(result.get("market_health")),
@@ -271,6 +299,17 @@ def build_live_run_record(
         )
 
     run_id = f"live_{generated_at_iso.replace(':', '').replace('-', '')}"
+    portfolio_total = float(final_account["portfolio_value"]) if float(final_account["portfolio_value"]) else 0.0
+    enriched_positions = []
+    for position in final_positions:
+        market_value = float(position.get("market_value", 0.0))
+        enriched_positions.append(
+            {
+                **position,
+                "weight_percent": (market_value / portfolio_total) * 100.0 if portfolio_total else 0.0,
+            }
+        )
+
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "live_run",
@@ -280,11 +319,15 @@ def build_live_run_record(
         "status": status,
         "environment": environment,
         "trigger_source": trigger_source,
+        "settings": settings,
         "summary": summary,
         "initial_account": initial_account,
         "final_account": final_account,
-        "final_positions": final_positions,
+        "final_positions": enriched_positions,
         "actions": action_lists,
+        "action_details": result.get("action_details", []) if result is not None else [],
+        "portfolio_history": portfolio_history or {},
+        "recent_orders": recent_orders or [],
         "error_detail": error_detail,
     }
 
@@ -318,6 +361,7 @@ def publish_live_run(
         "summary": live_run_record["summary"],
         "detail_path": _site_url(site_data_root, detail_path),
         "error_detail": live_run_record["error_detail"],
+        "final_account": live_run_record["final_account"],
     }
 
     current_history = _read_json(history_path, {"schema_version": SCHEMA_VERSION, "updated_at": None, "runs": []})
@@ -336,5 +380,57 @@ def publish_live_run(
 
     return {
         "history": history_payload,
+        "paths": published_paths,
+    }
+
+
+def publish_error_event(
+    *,
+    generated_at,
+    source,
+    title,
+    message,
+    site_data_root=DEFAULT_SITE_DATA_ROOT,
+    severity="error",
+    category="runtime_error",
+    run_id=None,
+    context=None,
+    max_errors=DEFAULT_ERROR_HISTORY_LIMIT,
+):
+    site_data_root = Path(site_data_root)
+    published_paths = []
+    generated_at_iso = generated_at.isoformat() if isinstance(generated_at, datetime) else str(generated_at)
+    history_path = site_data_root / "errors" / "history.json"
+    event_id = f"{source}_{generated_at_iso.replace(':', '').replace('-', '')}"
+
+    error_event = {
+        "id": event_id,
+        "generated_at": generated_at_iso,
+        "source": source,
+        "severity": severity,
+        "category": category,
+        "title": title,
+        "message": message,
+        "run_id": run_id,
+        "context": context or {},
+    }
+
+    current_history = _read_json(history_path, {"schema_version": SCHEMA_VERSION, "updated_at": None, "errors": []})
+    errors = [error for error in current_history.get("errors", []) if error.get("id") != event_id]
+    errors.insert(0, error_event)
+    errors = _sort_runs_desc(errors)[:max_errors]
+
+    history_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": generated_at_iso,
+        "latest_error_id": event_id,
+        "errors": errors,
+    }
+    _write_json(history_path, history_payload)
+    _append_if_present(published_paths, history_path)
+
+    return {
+        "history": history_payload,
+        "event": error_event,
         "paths": published_paths,
     }
