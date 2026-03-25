@@ -1,5 +1,8 @@
-const BACKTEST_HISTORY_URL = "./data/backtests/index.json";
-const LIVE_HISTORY_URL = "./data/live/history.json";
+const DASHBOARD_CONFIG = window.MOMENTUM_DASHBOARD_CONFIG ?? {};
+const DATA_BASE_URL = normalizeDataBaseUrl(DASHBOARD_CONFIG.dataBaseUrl);
+const BACKTEST_HISTORY_URL = resolveDataUrl("./data/backtests/index.json");
+const LIVE_HISTORY_URL = resolveDataUrl("./data/live/history.json");
+const ERROR_HISTORY_URL = resolveDataUrl("./data/errors/history.json");
 const LIVE_TIMEFRAME_ORDER = ["1M", "3M", "1A"];
 
 const state = {
@@ -21,6 +24,65 @@ const state = {
         error: null
     }
 };
+
+function normalizeDataBaseUrl(value) {
+    if (!value) {
+        return "";
+    }
+
+    return String(value).trim().replace(/\/+$/, "");
+}
+
+function resolveDataUrl(path) {
+    if (!path) {
+        return path;
+    }
+
+    if (/^https?:\/\//i.test(path)) {
+        return path;
+    }
+
+    if (!DATA_BASE_URL) {
+        return path;
+    }
+
+    const normalizedPath = String(path)
+        .trim()
+        .replace(/^\.\//, "")
+        .replace(/^\/+/, "");
+
+    if (normalizedPath.startsWith("data/")) {
+        return `${DATA_BASE_URL}/${normalizedPath.slice("data/".length)}`;
+    }
+
+    return `${DATA_BASE_URL}/${normalizedPath}`;
+}
+
+function normalizeArtifactPaths(value) {
+    if (!value || typeof value !== "object") {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((entry) => normalizeArtifactPaths(entry));
+    }
+
+    const normalized = { ...value };
+
+    ["detail_path", "chart_path", "results_path"].forEach((key) => {
+        if (typeof normalized[key] === "string" && normalized[key]) {
+            normalized[key] = resolveDataUrl(normalized[key]);
+        }
+    });
+
+    Object.entries(normalized).forEach(([key, entry]) => {
+        if (entry && typeof entry === "object") {
+            normalized[key] = normalizeArtifactPaths(entry);
+        }
+    });
+
+    return normalized;
+}
 
 function safeArray(value) {
     return Array.isArray(value) ? value : [];
@@ -857,7 +919,7 @@ async function ensureBacktestDetail(runId) {
         return summary ?? null;
     }
 
-    const payload = await fetchJson(summary.detail_path);
+    const payload = normalizeArtifactPaths(await fetchJson(resolveDataUrl(summary.detail_path)));
     state.backtest.runDetails[runId] = payload;
     return payload;
 }
@@ -872,7 +934,7 @@ async function ensureLiveDetail(runId) {
         return summary ?? null;
     }
 
-    const payload = await fetchJson(summary.detail_path);
+    const payload = normalizeArtifactPaths(await fetchJson(resolveDataUrl(summary.detail_path)));
     state.live.runDetails[runId] = payload;
     return payload;
 }
@@ -902,7 +964,7 @@ async function selectLiveRun(runId) {
 
 async function loadBacktestHistory() {
     try {
-        const payload = await fetchJson(BACKTEST_HISTORY_URL);
+        const payload = normalizeArtifactPaths(await fetchJson(BACKTEST_HISTORY_URL));
         state.backtest.error = null;
         state.backtest.history = payload;
         state.backtest.selectedRunId = payload.runs?.[0]?.id ?? null;
@@ -925,7 +987,7 @@ async function loadBacktestHistory() {
 
 async function loadLiveHistory() {
     try {
-        const payload = await fetchJson(LIVE_HISTORY_URL);
+        const payload = normalizeArtifactPaths(await fetchJson(LIVE_HISTORY_URL));
         state.live.error = null;
         state.live.history = payload;
         state.live.selectedRunId = payload.runs?.[0]?.id ?? null;
@@ -949,7 +1011,7 @@ async function loadLiveHistory() {
 
 async function loadErrorHistory() {
     try {
-        const response = await fetch("./data/errors/history.json", { cache: "no-store" });
+        const response = await fetch(ERROR_HISTORY_URL, { cache: "no-store" });
         if (!response.ok) {
             state.errors.history = { errors: [] };
             return;
