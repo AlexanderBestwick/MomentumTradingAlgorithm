@@ -12,6 +12,15 @@ ERRORS_KEY = os.environ.get("ERRORS_KEY", "errors/history.json")
 MAX_ERRORS = int(os.environ.get("MAX_ERRORS", "40"))
 
 
+def _empty_history():
+    return {
+        "schema_version": 1,
+        "updated_at": None,
+        "latest_error_id": None,
+        "errors": [],
+    }
+
+
 def _read_history():
     try:
         response = s3.get_object(Bucket=BUCKET_NAME, Key=ERRORS_KEY)
@@ -19,17 +28,12 @@ def _read_history():
         error_code = exc.response["Error"]["Code"]
         if error_code not in {"NoSuchKey", "404"}:
             raise
-        return {
-            "schema_version": 1,
-            "updated_at": None,
-            "latest_error_id": None,
-            "errors": [],
-        }
+        return _empty_history()
 
     return json.loads(response["Body"].read().decode("utf-8"))
 
 
-def _is_failure(detail):
+def _is_task_failure(detail):
     containers = detail.get("containers", [])
     exit_codes = [
         container.get("exitCode")
@@ -48,17 +52,26 @@ def _is_failure(detail):
     )
 
 
-def lambda_handler(event, context):
+def _is_ecs_task_state_change_failure(event):
     detail = event.get("detail", {})
-    if detail.get("lastStatus") != "STOPPED":
-        return {"ignored": True, "reason": "Task is not stopped."}
+    return detail.get("lastStatus") == "STOPPED" and _is_task_failure(detail)
 
-    if not _is_failure(detail):
-        return {"ignored": True, "reason": "Task stopped cleanly."}
 
-    history = _read_history()
+def _is_cloudtrail_runtask_failure(event):
+    detail = event.get("detail", {})
+    return (
+        event.get("detail-type") == "AWS API Call via CloudTrail"
+        and detail.get("eventSource") == "ecs.amazonaws.com"
+        and detail.get("eventName") == "RunTask"
+        and bool(detail.get("errorCode"))
+    )
+
+
+def _build_ecs_task_failure_event(event):
+    detail = event.get("detail", {})
     generated_at = event.get("time", datetime.now(timezone.utc).isoformat())
-    error_event = {
+
+    return {
         "id": event.get("id"),
         "generated_at": generated_at,
         "source": "ecs_eventbridge",
@@ -84,6 +97,60 @@ def lambda_handler(event, context):
         },
     }
 
+
+def _build_cloudtrail_runtask_failure_event(event):
+    detail = event.get("detail", {})
+    generated_at = event.get("time", datetime.now(timezone.utc).isoformat())
+    request_parameters = detail.get("requestParameters") or {}
+    network_configuration = request_parameters.get("networkConfiguration") or {}
+    awsvpc_configuration = network_configuration.get("awsvpcConfiguration") or {}
+    user_identity = detail.get("userIdentity") or {}
+
+    return {
+        "id": event.get("id"),
+        "generated_at": generated_at,
+        "source": "ecs_cloudtrail",
+        "severity": "error",
+        "category": "ecs_runtask_failed",
+        "title": "ECS RunTask failed",
+        "message": detail.get("errorMessage") or "ECS RunTask request failed.",
+        "run_id": event.get("id"),
+        "context": {
+            "eventSource": detail.get("eventSource"),
+            "eventName": detail.get("eventName"),
+            "errorCode": detail.get("errorCode"),
+            "errorMessage": detail.get("errorMessage"),
+            "cluster": request_parameters.get("cluster"),
+            "taskDefinition": request_parameters.get("taskDefinition"),
+            "launchType": request_parameters.get("launchType"),
+            "platformVersion": request_parameters.get("platformVersion"),
+            "subnets": awsvpc_configuration.get("subnets", []),
+            "securityGroups": awsvpc_configuration.get("securityGroups", []),
+            "assignPublicIp": awsvpc_configuration.get("assignPublicIp"),
+            "userIdentity": {
+                "type": user_identity.get("type"),
+                "arn": user_identity.get("arn"),
+                "principalId": user_identity.get("principalId"),
+                "accountId": user_identity.get("accountId"),
+            },
+        },
+    }
+
+
+def _select_error_event(event):
+    if _is_ecs_task_state_change_failure(event):
+        return _build_ecs_task_failure_event(event)
+
+    if _is_cloudtrail_runtask_failure(event):
+        return _build_cloudtrail_runtask_failure_event(event)
+
+    return None
+
+
+def _write_error_event(error_event):
+    history = _read_history()
+    generated_at = error_event["generated_at"]
+
     existing_errors = [
         error
         for error in history.get("errors", [])
@@ -107,3 +174,11 @@ def lambda_handler(event, context):
     )
 
     return {"written": True, "error_id": error_event["id"]}
+
+
+def lambda_handler(event, context):
+    error_event = _select_error_event(event)
+    if error_event is None:
+        return {"ignored": True, "reason": "Event did not match a supported ECS failure shape."}
+
+    return _write_error_event(error_event)

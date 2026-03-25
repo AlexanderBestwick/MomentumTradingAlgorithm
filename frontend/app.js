@@ -367,6 +367,18 @@ function getAlertEntries() {
         severity: error.severity ?? "error",
         source: error.source ?? "publisher"
     }));
+    const liveRunFailures = publishedErrors.length > 0
+        ? []
+        : safeArray(state.live.history?.runs)
+            .filter((run) => run?.status === "failed")
+            .map((run) => ({
+                id: `live-run-failure-${run.id}`,
+                title: "Live run failed",
+                message: run.error_detail ?? "The live worker reported a failed run without an attached error message.",
+                generated_at: run.generated_at,
+                severity: "error",
+                source: run.trigger_source ?? "live_history"
+            }));
 
     const dashboardErrors = [
         state.live.error
@@ -391,7 +403,9 @@ function getAlertEntries() {
             : null
     ].filter(Boolean);
 
-    const combined = [...dashboardErrors, ...publishedErrors];
+    const datedAlerts = [...publishedErrors, ...liveRunFailures]
+        .sort((left, right) => String(right.generated_at ?? "").localeCompare(String(left.generated_at ?? "")));
+    const combined = [...dashboardErrors, ...datedAlerts];
     const seen = new Set();
     return combined
         .filter((entry) => {
@@ -410,7 +424,7 @@ function renderHeroAlerts() {
     setText("hero-alert-count", alerts.length === 0 ? "0 active" : `${alerts.length} active`);
 
     if (alerts.length === 0) {
-        container.innerHTML = emptyStateHtml("No published errors right now. When a live run or local backtest fails, the message will appear here.");
+        container.innerHTML = emptyStateHtml("No recent errors found. Published error events and failed live runs will appear here.");
         return;
     }
 
