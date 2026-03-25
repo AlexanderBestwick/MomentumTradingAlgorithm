@@ -33,6 +33,20 @@ function normalizeDataBaseUrl(value) {
     return String(value).trim().replace(/\/+$/, "");
 }
 
+function shouldPreferLocalData() {
+    if (typeof window === "undefined" || !window.location) {
+        return false;
+    }
+
+    const { protocol, hostname } = window.location;
+    return (
+        protocol === "file:"
+        || hostname === "localhost"
+        || hostname === "127.0.0.1"
+        || hostname === "[::1]"
+    );
+}
+
 function resolveDataUrl(path) {
     if (!path) {
         return path;
@@ -42,7 +56,7 @@ function resolveDataUrl(path) {
         return path;
     }
 
-    if (!DATA_BASE_URL) {
+    if (!DATA_BASE_URL || shouldPreferLocalData()) {
         return path;
     }
 
