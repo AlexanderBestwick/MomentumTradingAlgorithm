@@ -16,9 +16,11 @@ from FullRun import RunAll, build_live_clients
 from SiteData.Publisher import (
     DEFAULT_LIVE_HISTORY_LIMIT,
     DEFAULT_SITE_DATA_ROOT,
+    LIVE_ERROR_SOURCES,
     build_live_run_record,
     publish_error_event,
     publish_live_run,
+    resolve_error_events,
     upload_site_data_to_s3,
 )
 
@@ -301,10 +303,15 @@ def main():
             site_data_root=site_data_root,
             max_runs=live_history_limit,
         )
+        resolved_error_data = resolve_error_events(
+            resolved_at=datetime.now(timezone.utc),
+            site_data_root=site_data_root,
+            sources=LIVE_ERROR_SOURCES,
+        )
         print(f"Published live run site data at {site_data_root} with run_id={live_run_record['id']}")
         if s3_publish_enabled:
             uploaded_paths = upload_site_data_to_s3(
-                published_site_data["paths"],
+                [*published_site_data["paths"], *resolved_error_data["paths"]],
                 site_data_root=site_data_root,
                 bucket_name=s3_bucket_name,
                 prefix=s3_prefix,

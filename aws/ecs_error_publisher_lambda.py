@@ -74,6 +74,7 @@ def _build_ecs_task_failure_event(event):
     return {
         "id": event.get("id"),
         "generated_at": generated_at,
+        "status": "active",
         "source": "ecs_eventbridge",
         "severity": "error",
         "category": "ecs_task_stopped",
@@ -109,6 +110,7 @@ def _build_cloudtrail_runtask_failure_event(event):
     return {
         "id": event.get("id"),
         "generated_at": generated_at,
+        "status": "active",
         "source": "ecs_cloudtrail",
         "severity": "error",
         "category": "ecs_runtask_failed",

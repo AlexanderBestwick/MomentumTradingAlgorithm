@@ -372,19 +372,58 @@ function renderHero() {
     );
 }
 
+function getLatestSuccessfulLiveRunTimestamp() {
+    const completedRuns = safeArray(state.live.history?.runs)
+        .filter((run) => run?.status === "completed" && run?.generated_at);
+
+    if (completedRuns.length === 0) {
+        return null;
+    }
+
+    return completedRuns
+        .map((run) => Date.parse(run.generated_at))
+        .filter((value) => Number.isFinite(value))
+        .sort((left, right) => right - left)[0] ?? null;
+}
+
 function getAlertEntries() {
-    const publishedErrors = safeArray(state.errors.history?.errors).map((error) => ({
-        id: error.id,
-        title: error.title ?? "Published error",
-        message: error.message ?? "No message provided.",
-        generated_at: error.generated_at,
-        severity: error.severity ?? "error",
-        source: error.source ?? "publisher"
-    }));
+    const latestSuccessfulLiveRunTimestamp = getLatestSuccessfulLiveRunTimestamp();
+    const publishedErrors = safeArray(state.errors.history?.errors)
+        .filter((error) => error?.status !== "resolved")
+        .filter((error) => {
+            const generatedAt = Date.parse(error?.generated_at ?? "");
+            const isLiveRelated = ["live_worker", "ecs_eventbridge", "ecs_cloudtrail"].includes(error?.source);
+
+            return !(
+                isLiveRelated
+                && latestSuccessfulLiveRunTimestamp !== null
+                && Number.isFinite(generatedAt)
+                && generatedAt <= latestSuccessfulLiveRunTimestamp
+            );
+        })
+        .map((error) => ({
+            id: error.id,
+            title: error.title ?? "Published error",
+            message: error.message ?? "No message provided.",
+            generated_at: error.generated_at,
+            severity: error.severity ?? "error",
+            source: error.source ?? "publisher"
+        }));
     const liveRunFailures = publishedErrors.length > 0
         ? []
         : safeArray(state.live.history?.runs)
-            .filter((run) => run?.status === "failed")
+            .filter((run) => {
+                if (run?.status !== "failed" || !run?.generated_at) {
+                    return false;
+                }
+
+                if (latestSuccessfulLiveRunTimestamp === null) {
+                    return true;
+                }
+
+                const generatedAt = Date.parse(run.generated_at);
+                return Number.isFinite(generatedAt) && generatedAt > latestSuccessfulLiveRunTimestamp;
+            })
             .map((run) => ({
                 id: `live-run-failure-${run.id}`,
                 title: "Live run failed",

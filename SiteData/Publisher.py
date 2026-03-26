@@ -10,6 +10,7 @@ DEFAULT_BACKTEST_HISTORY_LIMIT = 12
 DEFAULT_LIVE_HISTORY_LIMIT = 30
 DEFAULT_ERROR_HISTORY_LIMIT = 40
 SCHEMA_VERSION = 1
+LIVE_ERROR_SOURCES = {"live_worker", "ecs_eventbridge", "ecs_cloudtrail"}
 
 
 def _json_default(value):
@@ -63,6 +64,20 @@ def _site_url(site_data_root, target_path):
 
 def _sort_runs_desc(runs):
     return sorted(runs, key=lambda run: run.get("generated_at", ""), reverse=True)
+
+
+def _coerce_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    normalized = str(value).strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
 
 
 def _normalize_symbol_list(values):
@@ -406,6 +421,7 @@ def publish_error_event(
     error_event = {
         "id": event_id,
         "generated_at": generated_at_iso,
+        "status": "active",
         "source": source,
         "severity": severity,
         "category": category,
@@ -432,5 +448,71 @@ def publish_error_event(
     return {
         "history": history_payload,
         "event": error_event,
+        "paths": published_paths,
+    }
+
+
+def resolve_error_events(
+    *,
+    resolved_at,
+    site_data_root=DEFAULT_SITE_DATA_ROOT,
+    sources=None,
+    categories=None,
+    max_errors=DEFAULT_ERROR_HISTORY_LIMIT,
+):
+    site_data_root = Path(site_data_root)
+    published_paths = []
+    history_path = site_data_root / "errors" / "history.json"
+    current_history = _read_json(history_path, {"schema_version": SCHEMA_VERSION, "updated_at": None, "errors": []})
+    resolved_at_iso = resolved_at.isoformat() if isinstance(resolved_at, datetime) else str(resolved_at)
+    resolved_at_dt = _coerce_datetime(resolved_at_iso)
+
+    if not current_history.get("errors"):
+        return {
+            "history": current_history,
+            "paths": published_paths,
+        }
+
+    resolved_any = False
+    resolved_errors = []
+    for error in current_history.get("errors", []):
+        error_copy = dict(error)
+        matches_source = not sources or error_copy.get("source") in sources
+        matches_category = not categories or error_copy.get("category") in categories
+        error_generated_at = _coerce_datetime(error_copy.get("generated_at"))
+        should_resolve = (
+            error_copy.get("status") != "resolved"
+            and matches_source
+            and matches_category
+            and resolved_at_dt is not None
+            and error_generated_at is not None
+            and error_generated_at <= resolved_at_dt
+        )
+
+        if should_resolve:
+            error_copy["status"] = "resolved"
+            error_copy["resolved_at"] = resolved_at_iso
+            resolved_any = True
+
+        resolved_errors.append(error_copy)
+
+    if not resolved_any:
+        return {
+            "history": current_history,
+            "paths": published_paths,
+        }
+
+    resolved_errors = _sort_runs_desc(resolved_errors)[:max_errors]
+    history_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": resolved_at_iso,
+        "latest_error_id": current_history.get("latest_error_id"),
+        "errors": resolved_errors,
+    }
+    _write_json(history_path, history_payload)
+    _append_if_present(published_paths, history_path)
+
+    return {
+        "history": history_payload,
         "paths": published_paths,
     }
