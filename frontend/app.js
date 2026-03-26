@@ -445,6 +445,32 @@ function buildRightPercentAxisLabels(ticks, bounds, dimensions) {
         .join("");
 }
 
+function buildBottomDateLabels(dates, dimensions, formatter = formatShortDate) {
+    const labels = safeArray(dates);
+    if (labels.length === 0) {
+        return "";
+    }
+
+    const usableWidth = dimensions.width - dimensions.left - dimensions.right;
+    const minimumSpacing = 180;
+    const labelCount = Math.min(labels.length, Math.max(2, Math.floor(usableWidth / minimumSpacing) + 1));
+    const lastIndex = labels.length - 1;
+    const indices = [];
+
+    for (let index = 0; index < labelCount; index += 1) {
+        indices.push(Math.round((index * lastIndex) / Math.max(labelCount - 1, 1)));
+    }
+
+    return [...new Set(indices)]
+        .map((valueIndex) => {
+            const x = dimensions.left + (usableWidth * valueIndex) / Math.max(lastIndex, 1);
+            const anchor = valueIndex === 0 ? "start" : (valueIndex === lastIndex ? "end" : "middle");
+            const label = formatter(labels[valueIndex]);
+            return `<text x="${x}" y="${dimensions.height - 10}" text-anchor="${anchor}" fill="rgba(98,91,80,0.92)" font-size="11">${label}</text>`;
+        })
+        .join("");
+}
+
 function diffDays(startValue, endValue) {
     const start = Date.parse(startValue ?? "");
     const end = Date.parse(endValue ?? "");
@@ -860,6 +886,7 @@ function renderBacktestChart(run) {
     const gridLines = buildAxisGridLines(leftAxis.ticks, leftBounds, dimensions);
     const leftTicks = buildLeftAxisLabels(leftAxis.ticks, leftBounds, dimensions);
     const rightTicks = buildRightPercentAxisLabels([100, 50, 0], reserveBounds, dimensions);
+    const bottomDateLabels = buildBottomDateLabels(dates, dimensions);
 
     svg.innerHTML = `
         <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>
@@ -869,8 +896,7 @@ function renderBacktestChart(run) {
         <line x1="${dimensions.left}" y1="${dimensions.height - dimensions.bottom}" x2="${dimensions.width - dimensions.right}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
         ${leftTicks}
         ${rightTicks}
-        <text x="${dimensions.left}" y="${dimensions.height - 10}" fill="rgba(98,91,80,0.92)" font-size="11">${dates[0] ?? ""}</text>
-        <text x="${dimensions.width - dimensions.right}" y="${dimensions.height - 10}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${dates[dates.length - 1] ?? ""}</text>
+        ${bottomDateLabels}
         <polyline fill="none" stroke="#0f6d66" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" points="${buildPolylinePoints(portfolioValues, leftBounds, dimensions)}"></polyline>
         <polyline fill="none" stroke="#b66a1d" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${buildPolylinePoints(benchmarkValues, leftBounds, dimensions)}"></polyline>
         <polyline fill="none" stroke="#c54747" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" points="${buildPolylinePoints(averageValues, leftBounds, dimensions)}"></polyline>
@@ -1102,6 +1128,7 @@ function renderLiveChart(run) {
     const bounds = axis.bounds;
     const gridLines = buildAxisGridLines(axis.ticks, bounds, dimensions);
     const leftTicks = buildLeftAxisLabels(axis.ticks, bounds, dimensions);
+    const bottomDateLabels = buildBottomDateLabels(timestamps, dimensions);
 
     svg.innerHTML = `
         <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>
@@ -1109,8 +1136,7 @@ function renderLiveChart(run) {
         <line x1="${dimensions.left}" y1="${dimensions.top}" x2="${dimensions.left}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
         <line x1="${dimensions.left}" y1="${dimensions.height - dimensions.bottom}" x2="${dimensions.width - dimensions.right}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
         ${leftTicks}
-        <text x="${dimensions.left}" y="${dimensions.height - 10}" fill="rgba(98,91,80,0.92)" font-size="11">${formatShortDate(timestamps[0])}</text>
-        <text x="${dimensions.width - dimensions.right}" y="${dimensions.height - 10}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${formatShortDate(timestamps[timestamps.length - 1])}</text>
+        ${bottomDateLabels}
         <polyline fill="none" stroke="#0f6d66" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" points="${buildPolylinePoints(equityValues, bounds, dimensions)}"></polyline>
         <polyline fill="none" stroke="#2f4f7f" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 7" points="${buildPolylinePoints(baseline, bounds, dimensions)}"></polyline>
     `;
