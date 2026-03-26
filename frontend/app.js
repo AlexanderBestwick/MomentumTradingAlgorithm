@@ -47,6 +47,33 @@ function shouldPreferLocalData() {
     );
 }
 
+function encodeUrlPath(path) {
+    if (!path) {
+        return path;
+    }
+
+    const [pathAndQuery, hashFragment = ""] = String(path).split("#", 2);
+    const [pathname, queryString = ""] = pathAndQuery.split("?", 2);
+    const encodedPathname = pathname
+        .split("/")
+        .map((segment) => {
+            if (!segment) {
+                return segment;
+            }
+
+            try {
+                return encodeURIComponent(decodeURIComponent(segment));
+            } catch {
+                return encodeURIComponent(segment);
+            }
+        })
+        .join("/");
+
+    const querySuffix = queryString ? `?${queryString}` : "";
+    const hashSuffix = hashFragment ? `#${hashFragment}` : "";
+    return `${encodedPathname}${querySuffix}${hashSuffix}`;
+}
+
 function resolveDataUrl(path) {
     if (!path) {
         return path;
@@ -65,11 +92,11 @@ function resolveDataUrl(path) {
         .replace(/^\.\//, "")
         .replace(/^\/+/, "");
 
-    if (normalizedPath.startsWith("data/")) {
-        return `${DATA_BASE_URL}/${normalizedPath.slice("data/".length)}`;
-    }
+    const relativePath = normalizedPath.startsWith("data/")
+        ? normalizedPath.slice("data/".length)
+        : normalizedPath;
 
-    return `${DATA_BASE_URL}/${normalizedPath}`;
+    return `${DATA_BASE_URL}/${encodeUrlPath(relativePath)}`;
 }
 
 function normalizeArtifactPaths(value) {
