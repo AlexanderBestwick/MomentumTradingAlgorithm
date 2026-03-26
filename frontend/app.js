@@ -341,16 +341,196 @@ function ensureSelectedLiveTimeframe(run) {
 
 function buildPolylinePoints(values, bounds, dimensions) {
     const usableWidth = dimensions.width - dimensions.left - dimensions.right;
-    const usableHeight = dimensions.height - dimensions.top - dimensions.bottom;
-    const denominator = Math.max(bounds.max - bounds.min, 1e-9);
 
     return values
         .map((value, index) => {
             const x = dimensions.left + (usableWidth * index) / Math.max(values.length - 1, 1);
-            const y = dimensions.top + ((bounds.max - value) / denominator) * usableHeight;
+            const y = scaleY(value, bounds, dimensions);
             return `${x.toFixed(2)},${y.toFixed(2)}`;
         })
         .join(" ");
+}
+
+function scaleY(value, bounds, dimensions) {
+    const usableHeight = dimensions.height - dimensions.top - dimensions.bottom;
+    const denominator = Math.max(bounds.max - bounds.min, 1e-9);
+    return dimensions.top + ((bounds.max - value) / denominator) * usableHeight;
+}
+
+function getNiceStep(rawStep) {
+    if (!Number.isFinite(rawStep) || rawStep <= 0) {
+        return 1;
+    }
+
+    const exponent = Math.floor(Math.log10(rawStep));
+    const fraction = rawStep / (10 ** exponent);
+
+    if (fraction <= 1) {
+        return 10 ** exponent;
+    }
+    if (fraction <= 2) {
+        return 2 * (10 ** exponent);
+    }
+    if (fraction <= 5) {
+        return 5 * (10 ** exponent);
+    }
+    return 10 * (10 ** exponent);
+}
+
+function buildCurrencyAxis(values, targetTickCount = 6) {
+    const numericValues = safeArray(values)
+        .map((value) => asNumber(value))
+        .filter((value) => value !== null);
+
+    if (numericValues.length === 0) {
+        return {
+            bounds: { min: 0, max: 1 },
+            ticks: [0, 1]
+        };
+    }
+
+    const minValue = Math.min(...numericValues);
+    const maxValue = Math.max(...numericValues);
+
+    if (minValue === maxValue) {
+        const step = getNiceStep(Math.max(Math.abs(maxValue) * 0.1, 1));
+        const min = Math.floor((minValue - step) / step) * step;
+        const max = Math.ceil((maxValue + step) / step) * step;
+        return {
+            bounds: { min, max },
+            ticks: [min, min + step, max]
+        };
+    }
+
+    const rawStep = (maxValue - minValue) / Math.max(targetTickCount - 1, 1);
+    const step = getNiceStep(rawStep);
+    const min = Math.floor(minValue / step) * step;
+    const max = Math.ceil(maxValue / step) * step;
+    const ticks = [];
+
+    for (let value = min; value <= max + step / 2; value += step) {
+        ticks.push(Number(value.toFixed(8)));
+    }
+
+    return {
+        bounds: { min, max },
+        ticks
+    };
+}
+
+function buildAxisGridLines(ticks, bounds, dimensions) {
+    return safeArray(ticks)
+        .map((value) => {
+            const y = scaleY(value, bounds, dimensions);
+            return `<line x1="${dimensions.left}" y1="${y}" x2="${dimensions.width - dimensions.right}" y2="${y}" stroke="rgba(27,26,23,0.08)" stroke-width="1" />`;
+        })
+        .join("");
+}
+
+function buildLeftAxisLabels(ticks, bounds, dimensions) {
+    return safeArray(ticks)
+        .map((value) => {
+            const y = scaleY(value, bounds, dimensions);
+            return `<text x="${dimensions.left - 10}" y="${y + 4}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${formatCurrency(value)}</text>`;
+        })
+        .join("");
+}
+
+function buildRightPercentAxisLabels(ticks, bounds, dimensions) {
+    return safeArray(ticks)
+        .map((value) => {
+            const y = scaleY(value, bounds, dimensions);
+            return `<text x="${dimensions.width - dimensions.right + 10}" y="${y + 4}" text-anchor="start" fill="rgba(98,91,80,0.92)" font-size="11">${value}%</text>`;
+        })
+        .join("");
+}
+
+function diffDays(startValue, endValue) {
+    const start = Date.parse(startValue ?? "");
+    const end = Date.parse(endValue ?? "");
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        return null;
+    }
+
+    return (end - start) / (1000 * 60 * 60 * 24);
+}
+
+function calculateAnnualizedReturn(startValue, endValue, days) {
+    const initial = asNumber(startValue);
+    const final = asNumber(endValue);
+    if (initial === null || final === null || initial <= 0 || final <= 0 || !Number.isFinite(days) || days <= 0) {
+        return null;
+    }
+
+    return (Math.pow(final / initial, 365.25 / days) - 1) * 100;
+}
+
+function formatDurationLabel(days) {
+    if (!Number.isFinite(days) || days <= 0) {
+        return "Insufficient span";
+    }
+
+    if (days >= 365.25) {
+        return `${(days / 365.25).toFixed(1)} years`;
+    }
+
+    if (days >= 30) {
+        return `${(days / 30.44).toFixed(1)} months`;
+    }
+
+    return `${Math.round(days)} days`;
+}
+
+function getBacktestAnnualizedReturn(run) {
+    if (!run) {
+        return { value: null, note: "Calculated across the selected backtest period." };
+    }
+
+    const startValue = run.settings?.initial_cash ?? run.summary?.initial_cash ?? safeArray(run.series?.portfolio_value)[0];
+    const endValue = run.summary?.final_portfolio_value ?? safeArray(run.series?.portfolio_value).slice(-1)[0];
+    const startDate = run.period?.start ?? safeArray(run.series?.dates)[0];
+    const endDate = run.period?.end ?? safeArray(run.series?.dates).slice(-1)[0];
+    const days = diffDays(startDate, endDate);
+
+    return {
+        value: calculateAnnualizedReturn(startValue, endValue, days),
+        note: Number.isFinite(days)
+            ? `Annualised across ${formatDurationLabel(days)}.`
+            : "Calculated across the selected backtest period."
+    };
+}
+
+function getLongestLiveTimeframe(run) {
+    return [...LIVE_TIMEFRAME_ORDER]
+        .reverse()
+        .find((label) => run?.portfolio_history?.[label])
+        ?? Object.keys(run?.portfolio_history ?? {})[0]
+        ?? null;
+}
+
+function getLiveAnnualizedReturn(run) {
+    if (!run) {
+        return { value: null, note: "Calculated from the longest published live history window." };
+    }
+
+    const timeframe = getLongestLiveTimeframe(run);
+    const series = timeframe ? run.portfolio_history?.[timeframe] : null;
+    if (!series) {
+        return { value: null, note: "Calculated from the longest published live history window." };
+    }
+
+    const timestamps = safeArray(series.timestamps);
+    const equities = safeArray(series.equity);
+    const days = diffDays(timestamps[0], timestamps[timestamps.length - 1]);
+    const startValue = series.base_value ?? equities[0];
+    const endValue = equities[equities.length - 1];
+
+    return {
+        value: calculateAnnualizedReturn(startValue, endValue, days),
+        note: timeframe && Number.isFinite(days)
+            ? `Annualised from the ${timeframe} window over ${formatDurationLabel(days)}.`
+            : "Calculated from the longest published live history window."
+    };
 }
 
 function setText(id, value) {
@@ -542,16 +722,21 @@ function renderBacktestSummary(run) {
         setText("backtest-drawdown-value", "—");
         setText("backtest-trades-value", "0");
         setText("backtest-fees-note", "No backtest data yet");
+        setText("backtest-annual-return", "—");
+        setText("backtest-annual-return-note", "Calculated across the selected backtest period.");
         return;
     }
 
     const summary = run.summary ?? {};
+    const annualized = getBacktestAnnualizedReturn(run);
     setText("backtest-portfolio-value", formatCurrency(summary.final_portfolio_value));
     setText("backtest-alpha-value", formatPercentValue(summary.alpha_percent));
     setText("backtest-alpha-note", `${formatSignedCurrency(summary.alpha_dollars)} versus ${summary.benchmark_symbol ?? "benchmark"}`);
     setText("backtest-drawdown-value", formatPercentValue(summary.max_drawdown_percent, 1, false));
     setText("backtest-trades-value", formatCompactNumber(summary.trade_count));
     setText("backtest-fees-note", `${formatCurrency(summary.fees_paid_cumulative, 2)} in fees`);
+    setText("backtest-annual-return", formatPercentValue(annualized.value, 2));
+    setText("backtest-annual-return-note", annualized.note);
 
     const alphaElement = document.getElementById("backtest-alpha-value");
     const drawdownElement = document.getElementById("backtest-drawdown-value");
@@ -668,32 +853,13 @@ function renderBacktestChart(run) {
         return;
     }
 
-    const leftMin = Math.min(...leftValues);
-    const leftMax = Math.max(...leftValues);
-    const padding = Math.max((leftMax - leftMin) * 0.08, 1);
-    const leftBounds = { min: leftMin - padding, max: leftMax + padding };
+    const leftAxis = buildCurrencyAxis(leftValues);
+    const leftBounds = leftAxis.bounds;
     const reserveBounds = { min: 0, max: 100 };
 
-    const gridLines = [0, 0.33, 0.66, 1]
-        .map((fraction) => {
-            const y = dimensions.top + fraction * (dimensions.height - dimensions.top - dimensions.bottom);
-            return `<line x1="${dimensions.left}" y1="${y}" x2="${dimensions.width - dimensions.right}" y2="${y}" stroke="rgba(27,26,23,0.08)" stroke-width="1" />`;
-        })
-        .join("");
-
-    const leftTicks = [leftBounds.max, (leftBounds.max + leftBounds.min) / 2, leftBounds.min]
-        .map((value, index) => {
-            const y = dimensions.top + (index / 2) * (dimensions.height - dimensions.top - dimensions.bottom);
-            return `<text x="${dimensions.left - 10}" y="${y + 4}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${formatCurrency(value)}</text>`;
-        })
-        .join("");
-
-    const rightTicks = [100, 50, 0]
-        .map((value, index) => {
-            const y = dimensions.top + (index / 2) * (dimensions.height - dimensions.top - dimensions.bottom);
-            return `<text x="${dimensions.width - dimensions.right + 10}" y="${y + 4}" text-anchor="start" fill="rgba(98,91,80,0.92)" font-size="11">${value}%</text>`;
-        })
-        .join("");
+    const gridLines = buildAxisGridLines(leftAxis.ticks, leftBounds, dimensions);
+    const leftTicks = buildLeftAxisLabels(leftAxis.ticks, leftBounds, dimensions);
+    const rightTicks = buildRightPercentAxisLabels([100, 50, 0], reserveBounds, dimensions);
 
     svg.innerHTML = `
         <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>
@@ -727,6 +893,8 @@ function renderLiveSummary(run) {
         setText("live-fees-paid", "—");
         setText("live-positions-held", "0");
         setText("live-last-run", state.live.error ?? "Run the live worker to populate this view.");
+        setText("live-annual-return", "—");
+        setText("live-annual-return-note", "Calculated from the longest published live history window.");
         setText("live-status-tag", "No live data");
         document.getElementById("live-status-tag").className = "tag";
         return;
@@ -734,12 +902,15 @@ function renderLiveSummary(run) {
 
     const summary = run.summary ?? {};
     const finalAccount = run.final_account ?? {};
+    const annualized = getLiveAnnualizedReturn(run);
     setText("live-portfolio-value", formatCurrency(finalAccount.portfolio_value));
     setText("live-cash-reserve", formatCurrency(finalAccount.cash));
     setText("live-cash-reserve-note", `${formatPercentValue(summary.reserve_percentage, 1, false)} reserve · ${formatModeLabel(getLiveSettings(run).defensive_mode, getLiveSettings(run).defensive_symbol)}`);
     setText("live-fees-paid", formatCurrency(summary.total_fees_paid, 2));
     setText("live-positions-held", formatCompactNumber(summary.positions_final));
     setText("live-last-run", `Updated ${formatDateTime(run.generated_at)}`);
+    setText("live-annual-return", formatPercentValue(annualized.value, 2));
+    setText("live-annual-return-note", annualized.note);
 
     const tag = document.getElementById("live-status-tag");
     tag.textContent = run.status === "failed"
@@ -927,24 +1098,10 @@ function renderLiveChart(run) {
     const baseline = new Array(equityValues.length).fill(baselineValue);
 
     const leftValues = [...equityValues, ...baseline];
-    const leftMin = Math.min(...leftValues);
-    const leftMax = Math.max(...leftValues);
-    const padding = Math.max((leftMax - leftMin) * 0.08, 1);
-    const bounds = { min: leftMin - padding, max: leftMax + padding };
-
-    const gridLines = [0, 0.33, 0.66, 1]
-        .map((fraction) => {
-            const y = dimensions.top + fraction * (dimensions.height - dimensions.top - dimensions.bottom);
-            return `<line x1="${dimensions.left}" y1="${y}" x2="${dimensions.width - dimensions.right}" y2="${y}" stroke="rgba(27,26,23,0.08)" stroke-width="1" />`;
-        })
-        .join("");
-
-    const leftTicks = [bounds.max, (bounds.max + bounds.min) / 2, bounds.min]
-        .map((value, index) => {
-            const y = dimensions.top + (index / 2) * (dimensions.height - dimensions.top - dimensions.bottom);
-            return `<text x="${dimensions.left - 10}" y="${y + 4}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${formatCurrency(value)}</text>`;
-        })
-        .join("");
+    const axis = buildCurrencyAxis(leftValues);
+    const bounds = axis.bounds;
+    const gridLines = buildAxisGridLines(axis.ticks, bounds, dimensions);
+    const leftTicks = buildLeftAxisLabels(axis.ticks, bounds, dimensions);
 
     svg.innerHTML = `
         <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>

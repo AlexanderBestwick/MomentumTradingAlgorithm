@@ -1,8 +1,45 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-03-24T21:11:49.037791+00:00",
-  "latest_run_id": "20260324T211149_20170201_20260201",
+  "updated_at": "2026-03-26T18:38:38.316140+00:00",
+  "latest_run_id": "20260326T183838_20170201_20260201",
   "runs": [
+    {
+      "id": "20260326T183838_20170201_20260201",
+      "generated_at": "2026-03-26T18:38:38.316140+00:00",
+      "period": {
+        "start": "2017-02-01",
+        "end": "2026-02-01",
+        "label": "2017-02-01 to 2026-02-01"
+      },
+      "summary": {
+        "initial_cash": 100000.0,
+        "benchmark_symbol": "SPTM",
+        "final_portfolio_value": 489416.48022523866,
+        "final_benchmark_value": 342472.4602203182,
+        "portfolio_return_percent": 389.4164802252386,
+        "benchmark_return_percent": 242.4724602203182,
+        "alpha_percent": 146.94402000492042,
+        "alpha_dollars": 146944.0200049205,
+        "final_reserve_percentage": 0.0,
+        "reserve_label": "Cash % of Portfolio",
+        "positions_final": 42,
+        "trade_count": 2611,
+        "strategy_run_count": 463,
+        "fees_paid_cumulative": 10278.922168302432,
+        "max_drawdown_percent": -29.765785837872926,
+        "defensive_mode": "cash",
+        "defensive_symbol": "",
+        "raw_rank_consideration_limit": 100,
+        "max_position_fraction": 0.1,
+        "trade_fee_flat": 1.0,
+        "trade_fee_rate": 0.0005,
+        "elapsed_seconds": 4093.172673800029,
+        "elapsed_label": "1h 8m 13s"
+      },
+      "detail_path": "./data/backtests/runs/20260326T183838_20170201_20260201.json",
+      "chart_path": "./data/backtests/charts/20260326T183838_20170201_20260201.png",
+      "results_path": "./data/backtests/results/20260326T183838_20170201_20260201.csv"
+    },
     {
       "id": "20260324T211149_20170201_20260201",
       "generated_at": "2026-03-24T21:11:49.037791+00:00",
