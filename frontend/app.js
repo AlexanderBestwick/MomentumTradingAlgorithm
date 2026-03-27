@@ -687,6 +687,34 @@ function buildBacktestWeeklyChangeSeries(series) {
     };
 }
 
+function findFirstNumericValue(values) {
+    for (const value of safeArray(values)) {
+        const numeric = asNumber(value);
+        if (numeric !== null && numeric !== 0) {
+            return numeric;
+        }
+    }
+
+    return null;
+}
+
+function rebaseSeries(values, targetBase) {
+    const seriesBase = findFirstNumericValue(values);
+    const normalizedTargetBase = asNumber(targetBase);
+    if (seriesBase === null || normalizedTargetBase === null) {
+        return safeArray(values);
+    }
+
+    return safeArray(values).map((value) => {
+        const numeric = asNumber(value);
+        if (numeric === null) {
+            return null;
+        }
+
+        return (numeric / seriesBase) * normalizedTargetBase;
+    });
+}
+
 function renderBacktestTimeframeButtons(run) {
     const container = document.getElementById("backtest-timeframe-switcher");
     if (!container) {
@@ -1120,8 +1148,13 @@ function renderBacktestChart(run) {
     }
 
     const portfolioValues = safeArray(visibleSeries?.portfolio_value);
-    const benchmarkValues = safeArray(visibleSeries?.benchmark_value);
-    const averageValues = safeArray(visibleSeries?.benchmark_200dma_value);
+    const portfolioStartValue = findFirstNumericValue(portfolioValues);
+    const benchmarkValues = state.backtest.selectedTimeframe === "ALL"
+        ? safeArray(visibleSeries?.benchmark_value)
+        : rebaseSeries(visibleSeries?.benchmark_value, portfolioStartValue);
+    const averageValues = state.backtest.selectedTimeframe === "ALL"
+        ? safeArray(visibleSeries?.benchmark_200dma_value)
+        : rebaseSeries(visibleSeries?.benchmark_200dma_value, portfolioStartValue);
     const reserveValues = safeArray(visibleSeries?.reserve_percentage);
     const leftValues = [...portfolioValues, ...benchmarkValues, ...averageValues].filter((value) => value !== null && value !== undefined);
     if (leftValues.length === 0) {
@@ -1155,8 +1188,8 @@ function renderBacktestChart(run) {
 
     legend.innerHTML = `
         <span class="legend-item"><span class="legend-swatch legend-portfolio"></span>Portfolio value</span>
-        <span class="legend-item"><span class="legend-swatch legend-benchmark"></span>${run.summary?.benchmark_symbol ?? "Benchmark"} buy & hold</span>
-        <span class="legend-item"><span class="legend-swatch legend-average"></span>${run.summary?.benchmark_symbol ?? "Benchmark"} 200DMA</span>
+        <span class="legend-item"><span class="legend-swatch legend-benchmark"></span>${run.summary?.benchmark_symbol ?? "Benchmark"} buy & hold${state.backtest.selectedTimeframe === "ALL" ? "" : " (rebased)"}</span>
+        <span class="legend-item"><span class="legend-swatch legend-average"></span>${run.summary?.benchmark_symbol ?? "Benchmark"} 200DMA${state.backtest.selectedTimeframe === "ALL" ? "" : " (rebased)"}</span>
         <span class="legend-item"><span class="legend-swatch legend-reserve"></span>${run.summary?.reserve_label ?? "Reserve % of portfolio"}</span>
     `;
 }
