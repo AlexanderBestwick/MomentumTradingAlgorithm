@@ -220,8 +220,10 @@ def RunAll(
             else set()
         )
 
-        # 5) Sell only when a held stock falls outside the shared raw-rank cutoff.
-        target_symbols = set(raw_sell_universe["symbol"])
+        # 5) Sell when a held stock falls outside the shared raw-rank cutoff
+        #    OR when it fails the viability filters (below 100-day MA or excessive volatility).
+        disqualified_symbols = set(selection_universe["rejected_stocks"]) | set(selection_universe["volatile_stocks"])
+        target_symbols = set(raw_sell_universe["symbol"]) - disqualified_symbols
         closed = _run_step(
             f"Position close step for {run_date.isoformat()}",
             PortfolioBalancer.close_positions,
