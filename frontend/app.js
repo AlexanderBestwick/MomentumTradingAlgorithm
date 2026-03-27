@@ -3,6 +3,12 @@ const DATA_BASE_URL = normalizeDataBaseUrl(DASHBOARD_CONFIG.dataBaseUrl);
 const BACKTEST_HISTORY_URL = resolveDataUrl("./data/backtests/index.json");
 const LIVE_HISTORY_URL = resolveDataUrl("./data/live/history.json");
 const ERROR_HISTORY_URL = resolveDataUrl("./data/errors/history.json");
+const BACKTEST_TIMEFRAME_ORDER = ["6M", "1Y", "3Y", "ALL"];
+const BACKTEST_CHART_MODES = [
+    { id: "performance", label: "Performance" },
+    { id: "spread", label: "Spread vs Index" },
+    { id: "weeklyChange", label: "Weekly Change" }
+];
 const LIVE_TIMEFRAME_ORDER = ["1M", "3M", "1A"];
 
 const state = {
@@ -13,6 +19,8 @@ const state = {
     backtest: {
         history: null,
         selectedRunId: null,
+        selectedTimeframe: "ALL",
+        selectedChartMode: "performance",
         runDetails: {},
         error: null
     },
@@ -191,6 +199,16 @@ function formatCompactNumber(value, digits = 0) {
         minimumFractionDigits: digits,
         maximumFractionDigits: digits
     }).format(numeric);
+}
+
+function formatAxisPercent(value) {
+    const numeric = asNumber(value);
+    if (numeric === null) {
+        return "—";
+    }
+
+    const digits = Math.abs(numeric) >= 10 ? 0 : 1;
+    return `${numeric.toFixed(digits)}%`;
 }
 
 function formatShortDate(value) {
@@ -378,6 +396,10 @@ function getNiceStep(rawStep) {
 }
 
 function buildCurrencyAxis(values, targetTickCount = 6) {
+    return buildNumericAxis(values, targetTickCount);
+}
+
+function buildNumericAxis(values, targetTickCount = 6) {
     const numericValues = safeArray(values)
         .map((value) => asNumber(value))
         .filter((value) => value !== null);
@@ -432,6 +454,15 @@ function buildLeftAxisLabels(ticks, bounds, dimensions) {
         .map((value) => {
             const y = scaleY(value, bounds, dimensions);
             return `<text x="${dimensions.left - 10}" y="${y + 4}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${formatCurrency(value)}</text>`;
+        })
+        .join("");
+}
+
+function buildFormattedLeftAxisLabels(ticks, bounds, dimensions, formatter) {
+    return safeArray(ticks)
+        .map((value) => {
+            const y = scaleY(value, bounds, dimensions);
+            return `<text x="${dimensions.left - 10}" y="${y + 4}" text-anchor="end" fill="rgba(98,91,80,0.92)" font-size="11">${formatter(value)}</text>`;
         })
         .join("");
 }
@@ -557,6 +588,153 @@ function getLiveAnnualizedReturn(run) {
             ? `Annualised from the ${timeframe} window over ${formatDurationLabel(days)}.`
             : "Calculated from the longest published live history window."
     };
+}
+
+function getBacktestTimeframeDays(timeframe) {
+    return {
+        "6M": 183,
+        "1Y": 365,
+        "3Y": 365 * 3,
+        ALL: null
+    }[timeframe] ?? null;
+}
+
+function sliceBacktestSeriesByTimeframe(series, timeframe) {
+    if (!series || timeframe === "ALL") {
+        return series;
+    }
+
+    const dates = safeArray(series.dates);
+    if (dates.length === 0) {
+        return series;
+    }
+
+    const dayCount = getBacktestTimeframeDays(timeframe);
+    if (!dayCount) {
+        return series;
+    }
+
+    const endTimestamp = Date.parse(dates[dates.length - 1]);
+    if (!Number.isFinite(endTimestamp)) {
+        return series;
+    }
+
+    const cutoff = endTimestamp - (dayCount * 24 * 60 * 60 * 1000);
+    const startIndex = Math.max(
+        dates.findIndex((date) => {
+            const timestamp = Date.parse(date);
+            return Number.isFinite(timestamp) && timestamp >= cutoff;
+        }),
+        0
+    );
+
+    return Object.fromEntries(
+        Object.entries(series).map(([key, value]) => ([
+            key,
+            Array.isArray(value) ? value.slice(startIndex) : value
+        ]))
+    );
+}
+
+function buildBacktestSpreadSeries(series) {
+    const dates = safeArray(series?.dates);
+    const portfolioValues = safeArray(series?.portfolio_value);
+    const benchmarkValues = safeArray(series?.benchmark_value);
+    const initialPortfolioValue = asNumber(portfolioValues[0]);
+    const initialBenchmarkValue = asNumber(benchmarkValues[0]);
+
+    if (!initialPortfolioValue || !initialBenchmarkValue) {
+        return { dates: [], values: [] };
+    }
+
+    const spreadDates = [];
+    const values = [];
+
+    dates.forEach((date, index) => {
+        const portfolioValue = asNumber(portfolioValues[index]);
+        const benchmarkValue = asNumber(benchmarkValues[index]);
+        if (portfolioValue === null || benchmarkValue === null) {
+            return;
+        }
+
+        spreadDates.push(date);
+        values.push((((portfolioValue / initialPortfolioValue) - 1) - ((benchmarkValue / initialBenchmarkValue) - 1)) * 100);
+    });
+
+    return { dates: spreadDates, values };
+}
+
+function buildBacktestWeeklyChangeSeries(series) {
+    const dates = safeArray(series?.dates);
+    const portfolioValues = safeArray(series?.portfolio_value);
+    const values = [];
+    const valueDates = [];
+
+    for (let index = 5; index < portfolioValues.length; index += 1) {
+        const currentValue = asNumber(portfolioValues[index]);
+        const priorValue = asNumber(portfolioValues[index - 5]);
+        if (currentValue === null || priorValue === null || priorValue === 0) {
+            continue;
+        }
+
+        valueDates.push(dates[index]);
+        values.push(((currentValue / priorValue) - 1) * 100);
+    }
+
+    return {
+        dates: valueDates,
+        values
+    };
+}
+
+function renderBacktestTimeframeButtons(run) {
+    const container = document.getElementById("backtest-timeframe-switcher");
+    if (!container) {
+        return;
+    }
+
+    container.innerHTML = "";
+    if (!run?.series) {
+        return;
+    }
+
+    BACKTEST_TIMEFRAME_ORDER.forEach((timeframe) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "timeframe-button";
+        button.textContent = timeframe;
+        button.classList.toggle("is-active", timeframe === state.backtest.selectedTimeframe);
+        button.addEventListener("click", () => {
+            state.backtest.selectedTimeframe = timeframe;
+            renderBacktestView();
+        });
+        container.appendChild(button);
+    });
+}
+
+function renderBacktestModeButtons(run) {
+    const container = document.getElementById("backtest-mode-switcher");
+    if (!container) {
+        return;
+    }
+
+    container.innerHTML = "";
+    if (!run?.series) {
+        return;
+    }
+
+    BACKTEST_CHART_MODES.forEach((mode) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "timeframe-button";
+        button.textContent = mode.label;
+        button.classList.toggle("is-active", mode.id === state.backtest.selectedChartMode);
+        button.addEventListener("click", () => {
+            state.backtest.selectedChartMode = mode.id;
+            renderBacktestView();
+        });
+        container.appendChild(button);
+    });
 }
 
 function setText(id, value) {
@@ -865,13 +1043,86 @@ function renderBacktestChart(run) {
     empty.classList.add("is-hidden");
     setText("selected-run-tag", run.period?.label ?? "Selected run");
 
+    const chartMode = state.backtest.selectedChartMode;
+    const visibleSeries = sliceBacktestSeriesByTimeframe(run.series, state.backtest.selectedTimeframe);
     const dimensions = { width: 900, height: 400, left: 62, right: 56, top: 22, bottom: 40 };
-    const portfolioValues = safeArray(run.series.portfolio_value);
-    const benchmarkValues = safeArray(run.series.benchmark_value);
-    const averageValues = safeArray(run.series.benchmark_200dma_value);
-    const reserveValues = safeArray(run.series.reserve_percentage);
-    const dates = safeArray(run.series.dates);
+    const dates = safeArray(visibleSeries?.dates);
+    const bottomDateLabels = buildBottomDateLabels(dates, dimensions);
 
+    if (chartMode === "spread") {
+        const spreadSeries = buildBacktestSpreadSeries(visibleSeries);
+        const spreadValues = safeArray(spreadSeries.values);
+        const leftValues = [...spreadValues, 0].filter((value) => value !== null && value !== undefined);
+        if (leftValues.length === 0 || spreadSeries.dates.length === 0) {
+            empty.classList.remove("is-hidden");
+            legend.innerHTML = "";
+            return;
+        }
+
+        const axis = buildNumericAxis(leftValues);
+        const bounds = axis.bounds;
+        const gridLines = buildAxisGridLines(axis.ticks, bounds, dimensions);
+        const leftTicks = buildFormattedLeftAxisLabels(axis.ticks, bounds, dimensions, formatAxisPercent);
+        const zeroLine = new Array(spreadSeries.dates.length).fill(0);
+        const spreadDateLabels = buildBottomDateLabels(spreadSeries.dates, dimensions);
+
+        svg.innerHTML = `
+            <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>
+            ${gridLines}
+            <line x1="${dimensions.left}" y1="${dimensions.top}" x2="${dimensions.left}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
+            <line x1="${dimensions.left}" y1="${dimensions.height - dimensions.bottom}" x2="${dimensions.width - dimensions.right}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
+            ${leftTicks}
+            ${spreadDateLabels}
+            <polyline fill="none" stroke="#1b1a17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 7" points="${buildPolylinePoints(zeroLine, bounds, dimensions)}"></polyline>
+            <polyline fill="none" stroke="#0f6d66" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" points="${buildPolylinePoints(spreadValues, bounds, dimensions)}"></polyline>
+        `;
+
+        legend.innerHTML = `
+            <span class="legend-item"><span class="legend-swatch legend-portfolio"></span>Portfolio excess return vs ${run.summary?.benchmark_symbol ?? "benchmark"}</span>
+            <span class="legend-item"><span class="legend-swatch legend-reserve"></span>Zero spread baseline</span>
+        `;
+        return;
+    }
+
+    if (chartMode === "weeklyChange") {
+        const weeklySeries = buildBacktestWeeklyChangeSeries(visibleSeries);
+        const weeklyValues = safeArray(weeklySeries.values);
+        const weeklyDates = safeArray(weeklySeries.dates);
+        const leftValues = [...weeklyValues, 0].filter((value) => value !== null && value !== undefined);
+        if (leftValues.length === 0 || weeklyDates.length === 0) {
+            empty.classList.remove("is-hidden");
+            legend.innerHTML = "";
+            return;
+        }
+
+        const axis = buildNumericAxis(leftValues);
+        const bounds = axis.bounds;
+        const gridLines = buildAxisGridLines(axis.ticks, bounds, dimensions);
+        const leftTicks = buildFormattedLeftAxisLabels(axis.ticks, bounds, dimensions, formatAxisPercent);
+        const zeroLine = new Array(weeklyDates.length).fill(0);
+
+        svg.innerHTML = `
+            <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>
+            ${gridLines}
+            <line x1="${dimensions.left}" y1="${dimensions.top}" x2="${dimensions.left}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
+            <line x1="${dimensions.left}" y1="${dimensions.height - dimensions.bottom}" x2="${dimensions.width - dimensions.right}" y2="${dimensions.height - dimensions.bottom}" stroke="rgba(27,26,23,0.16)" stroke-width="1" />
+            ${leftTicks}
+            ${buildBottomDateLabels(weeklyDates, dimensions)}
+            <polyline fill="none" stroke="#1b1a17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 7" points="${buildPolylinePoints(zeroLine, bounds, dimensions)}"></polyline>
+            <polyline fill="none" stroke="#b66a1d" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" points="${buildPolylinePoints(weeklyValues, bounds, dimensions)}"></polyline>
+        `;
+
+        legend.innerHTML = `
+            <span class="legend-item"><span class="legend-swatch legend-benchmark"></span>Portfolio 5-trading-day change</span>
+            <span class="legend-item"><span class="legend-swatch legend-reserve"></span>Zero change baseline</span>
+        `;
+        return;
+    }
+
+    const portfolioValues = safeArray(visibleSeries?.portfolio_value);
+    const benchmarkValues = safeArray(visibleSeries?.benchmark_value);
+    const averageValues = safeArray(visibleSeries?.benchmark_200dma_value);
+    const reserveValues = safeArray(visibleSeries?.reserve_percentage);
     const leftValues = [...portfolioValues, ...benchmarkValues, ...averageValues].filter((value) => value !== null && value !== undefined);
     if (leftValues.length === 0) {
         empty.classList.remove("is-hidden");
@@ -886,7 +1137,6 @@ function renderBacktestChart(run) {
     const gridLines = buildAxisGridLines(leftAxis.ticks, leftBounds, dimensions);
     const leftTicks = buildLeftAxisLabels(leftAxis.ticks, leftBounds, dimensions);
     const rightTicks = buildRightPercentAxisLabels([100, 50, 0], reserveBounds, dimensions);
-    const bottomDateLabels = buildBottomDateLabels(dates, dimensions);
 
     svg.innerHTML = `
         <rect x="0" y="0" width="${dimensions.width}" height="${dimensions.height}" fill="transparent"></rect>
@@ -1165,6 +1415,8 @@ function renderBacktestView() {
     const run = getSelectedBacktestRun();
     renderBacktestSummary(run);
     renderBacktestHistory();
+    renderBacktestModeButtons(run);
+    renderBacktestTimeframeButtons(run);
     renderBacktestChart(run);
     renderBacktestResults(run);
     renderBacktestSettings(run);
