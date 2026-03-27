@@ -15,6 +15,7 @@ import ViableStockList
 import LinearRegression
 import PortfolioBalancer
 import RiskBalancer
+import ExitConditions
 
 
 def _run_step(step_name, func, *args, **kwargs):
@@ -135,6 +136,9 @@ def RunAll(
     raw_rank_consideration_limit=80,
     max_position_fraction=0.10,
     enforce_live_safeguards=True,
+    trailing_stop_atr_multiplier=None,
+    trailing_stop_hwm_lookback=60,
+    short_momentum_lookback=None,
 ):
     if trading_client is None or data_client is None:
         trading_client, data_client = build_live_clients()
@@ -220,8 +224,27 @@ def RunAll(
             else set()
         )
 
-        # 5) Sell only when a held stock falls outside the shared raw-rank cutoff.
+        # 5) Sell when a held stock falls outside the shared raw-rank cutoff,
+        #    or when additional exit conditions fire (trailing stop, short-term momentum).
         target_symbols = set(raw_sell_universe["symbol"])
+        held_symbols = {p.symbol for p in trading_client.get_all_positions()} - protected_symbols
+
+        exit_condition_sells = set()
+        if trailing_stop_atr_multiplier is not None:
+            exit_condition_sells |= ExitConditions.trailing_stop_exits(
+                selection_universe["full_stock_df"],
+                held_symbols,
+                atr_multiplier=trailing_stop_atr_multiplier,
+                hwm_lookback=trailing_stop_hwm_lookback,
+            )
+        if short_momentum_lookback is not None:
+            exit_condition_sells |= ExitConditions.short_momentum_exits(
+                selection_universe["full_stock_df"],
+                held_symbols,
+                short_lookback=short_momentum_lookback,
+            )
+        target_symbols -= exit_condition_sells
+
         closed = _run_step(
             f"Position close step for {run_date.isoformat()}",
             PortfolioBalancer.close_positions,

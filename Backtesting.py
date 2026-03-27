@@ -57,6 +57,9 @@ EDITOR_DEFENSIVE_MODE = "treasury_bonds"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005
+EDITOR_TRAILING_STOP_ATR_MULTIPLIER = None   # e.g. 3.0 to enable
+EDITOR_TRAILING_STOP_HWM_LOOKBACK = 60
+EDITOR_SHORT_MOMENTUM_LOOKBACK = None        # e.g. 60 to enable
 EDITOR_EXPORT_SITE_DATA = True
 EDITOR_SITE_DATA_PATH = DEFAULT_SITE_DATA_PATH
 EDITOR_SITE_DATA_HISTORY_LIMIT = DEFAULT_SITE_DATA_HISTORY_LIMIT
@@ -632,6 +635,9 @@ def run_backtest(
     defensive_symbol="SGOV",
     trade_fee_flat=0.0,
     trade_fee_rate=0.0,
+    trailing_stop_atr_multiplier=None,
+    trailing_stop_hwm_lookback=60,
+    short_momentum_lookback=None,
     export_site_data=True,
     site_data_path=DEFAULT_SITE_DATA_PATH,
     site_data_history_limit=DEFAULT_SITE_DATA_HISTORY_LIMIT,
@@ -700,6 +706,9 @@ def run_backtest(
                     max_position_fraction=max_position_fraction,
                     defensive_mode=defensive_mode,
                     defensive_symbol=defensive_symbol,
+                    trailing_stop_atr_multiplier=trailing_stop_atr_multiplier,
+                    trailing_stop_hwm_lookback=trailing_stop_hwm_lookback,
+                    short_momentum_lookback=short_momentum_lookback,
                 )
             except Exception as exc:
                 raise RuntimeError(f"Backtest failed on {run_date.isoformat()}") from exc
@@ -846,6 +855,9 @@ def run_backtest_from_editor_settings():
         defensive_symbol=EDITOR_DEFENSIVE_SYMBOL,
         trade_fee_flat=EDITOR_TRADE_FEE_FLAT,
         trade_fee_rate=EDITOR_TRADE_FEE_RATE,
+        trailing_stop_atr_multiplier=EDITOR_TRAILING_STOP_ATR_MULTIPLIER,
+        trailing_stop_hwm_lookback=EDITOR_TRAILING_STOP_HWM_LOOKBACK,
+        short_momentum_lookback=EDITOR_SHORT_MOMENTUM_LOOKBACK,
         export_site_data=EDITOR_EXPORT_SITE_DATA,
         site_data_path=EDITOR_SITE_DATA_PATH,
         site_data_history_limit=EDITOR_SITE_DATA_HISTORY_LIMIT,
