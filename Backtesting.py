@@ -40,8 +40,8 @@ DEFAULT_AWS_REGION = os.getenv("AWS_REGION")
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2019-10-01"
-EDITOR_END_DATE = "2020-08-01"
+EDITOR_START_DATE = "2017-02-01"
+EDITOR_END_DATE = "2026-02-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")

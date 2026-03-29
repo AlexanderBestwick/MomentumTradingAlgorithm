@@ -1,3 +1,5 @@
 SPTM universe changes over the period so profits may differ from backtests
 
 Should scrape SPTM index tickers every call of the function as to maintain the stock universe correctly
+
+Rolling average renormalises when viewing shorter time frames
