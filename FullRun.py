@@ -48,7 +48,7 @@ def _build_action_details(
     rank_lookup,
     raw_rank_consideration_limit,
     approved_symbols,
-    filtered_buy_symbols,
+    filtered_symbols,
     max_position_fraction,
     defensive_symbol,
 ):
@@ -57,7 +57,7 @@ def _build_action_details(
         context = rank_lookup.get(symbol, {})
         rank = context.get("raw_rank")
         passes_filters = symbol in approved_symbols
-        buy_eligible = symbol in filtered_buy_symbols
+        buy_eligible = symbol in filtered_symbols
         momentum = context.get("momentum")
         annualised_return = context.get("annualised_return")
         atr = context.get("atr")
@@ -66,10 +66,24 @@ def _build_action_details(
         if category == "closed":
             if rank is None:
                 reason = "Left the ranked universe entirely for the current run."
+            elif rank > raw_rank_consideration_limit and not passes_filters:
+                reason = (
+                    f"Fell to raw rank {rank}, outside the raw top {raw_rank_consideration_limit} ranked universe, "
+                    "and failed the current buy filters."
+                )
+            elif rank > raw_rank_consideration_limit:
+                reason = (
+                    f"Fell to raw rank {rank}, outside the raw top {raw_rank_consideration_limit} ranked universe."
+                )
+            elif not passes_filters:
+                reason = (
+                    f"Remained inside the raw top {raw_rank_consideration_limit} ranked universe but failed the current buy filters, "
+                    "so it was removed from the weekly hold list."
+                )
             else:
-                reason = f"Fell to raw rank {rank}, outside the raw top {raw_rank_consideration_limit} ranked universe."
+                reason = "Left the weekly target list for the current run."
             if not passes_filters:
-                reason += " It also failed the current buy filters, which usually points to weaker liquidity, price, or volatility characteristics."
+                reason += " This usually points to weaker liquidity, price, or volatility characteristics."
         elif category == "capped_sells":
             reason = f"Trimmed to keep the position within the {max_position_fraction:.0%} single-stock cap."
         elif category == "overrisked":
@@ -199,19 +213,19 @@ def RunAll(
             max_position_fraction=max_position_fraction,
         )
 
-        # 4) Use one shared raw-rank cutoff for both sell and buy consideration.
-        raw_sell_universe = full_ranked_universe.head(raw_rank_consideration_limit).reset_index(drop=True)
-        raw_buy_universe = full_ranked_universe.head(raw_rank_consideration_limit).reset_index(drop=True)
-        filtered_buy_universe = (
-            raw_buy_universe.loc[lambda df: df["symbol"].isin(approved_symbols)]
+        # 4) Build one raw ranked window for context and one filtered universe for
+        # actual weekly hold/buy decisions.
+        raw_ranked_universe = full_ranked_universe.head(raw_rank_consideration_limit).reset_index(drop=True)
+        filtered_universe = (
+            raw_ranked_universe.loc[lambda df: df["symbol"].isin(approved_symbols)]
             .reset_index(drop=True)
         )
 
         print(f"{len(full_ranked_universe)} stocks in full ranked universe")
-        print(f"{len(filtered_buy_universe)} stocks in filtered buy universe")
+        print(f"{len(filtered_universe)} stocks in filtered weekly universe")
 
         approved_symbol_set = set(approved_symbols)
-        filtered_buy_symbol_set = set(filtered_buy_universe["symbol"]) if not filtered_buy_universe.empty else set()
+        filtered_symbol_set = set(filtered_universe["symbol"]) if not filtered_universe.empty else set()
         rank_lookup = _build_rank_lookup(full_ranked_universe)
 
         protected_symbols = (
@@ -220,8 +234,10 @@ def RunAll(
             else set()
         )
 
-        # 5) Sell only when a held stock falls outside the shared raw-rank cutoff.
-        target_symbols = set(raw_sell_universe["symbol"])
+        # 5) Weekly sell discipline uses the filtered universe, so names that fail
+        # the volatility or moving-average filters are removed even if they still
+        # sit inside the raw top-ranked cutoff.
+        target_symbols = filtered_symbol_set
         closed = _run_step(
             f"Position close step for {run_date.isoformat()}",
             PortfolioBalancer.close_positions,
@@ -239,15 +255,18 @@ def RunAll(
         )
         print()
 
-        # 6) Extra check every 2nd Wednesday: sell sizing uses raw ranking, buy sizing uses filtered buy universe.
+        # 6) Extra check every 2nd Wednesday: use the same filtered universe for
+        # rebalance sizing, but ignore anything already closed earlier in this run
+        # so we do not submit duplicate sell orders.
+        rebalance_protected_symbols = protected_symbols | set(closed)
         if second_week(run_date):
             print("Risk Balancing in Progress: Do not interrupt")
             overrisked = _run_step(
                 f"Risk reduction step for {run_date.isoformat()}",
                 RiskBalancer.sell_overrisked,
                 trading_client,
-                raw_sell_universe,
-                protected_symbols=protected_symbols,
+                filtered_universe,
+                protected_symbols=rebalance_protected_symbols,
             )
             if market_health:
                 underrisked = _run_step(
@@ -255,11 +274,11 @@ def RunAll(
                     RiskBalancer.buy_underrisked,
                     trading_client,
                     data_client,
-                    filtered_buy_universe,
+                    filtered_universe,
                     market_health,
                     sleep_seconds=sleep_seconds,
                     max_position_fraction=max_position_fraction,
-                    protected_symbols=protected_symbols,
+                    protected_symbols=rebalance_protected_symbols,
                 )
             else:
                 print("Bad Markets: sell-only mode during risk rebalance")
@@ -269,14 +288,14 @@ def RunAll(
             overrisked = []
             underrisked = []
 
-        # 7) Buy only from the filtered subset of the shared raw-rank cutoff.
+        # 7) Buy only from the filtered weekly universe.
         if market_health:
             opened = _run_step(
                 f"New position opening step for {run_date.isoformat()}",
                 PortfolioBalancer.open_positions,
                 trading_client,
                 data_client,
-                filtered_buy_universe,
+                filtered_universe,
                 market_health,
                 top_n=raw_rank_consideration_limit,
                 sleep_seconds=sleep_seconds,
@@ -302,9 +321,11 @@ def RunAll(
             "market_health": market_health,
             "approved_count": len(approved_df.index.get_level_values("symbol").unique()) if not approved_df.empty else 0,
             "full_ranked_universe": full_ranked_universe,
-            "raw_sell_universe": raw_sell_universe,
-            "raw_buy_universe": raw_buy_universe,
-            "filtered_buy_universe": filtered_buy_universe,
+            "raw_ranked_universe": raw_ranked_universe,
+            "filtered_universe": filtered_universe,
+            "raw_sell_universe": raw_ranked_universe,
+            "raw_buy_universe": raw_ranked_universe,
+            "filtered_buy_universe": filtered_universe,
             "closed": closed,
             "capped_sells": capped_sells,
             "overrisked": overrisked,
@@ -324,7 +345,7 @@ def RunAll(
                     rank_lookup=rank_lookup,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
-                    filtered_buy_symbols=filtered_buy_symbol_set,
+                    filtered_symbols=filtered_symbol_set,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -335,7 +356,7 @@ def RunAll(
                     rank_lookup=rank_lookup,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
-                    filtered_buy_symbols=filtered_buy_symbol_set,
+                    filtered_symbols=filtered_symbol_set,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -346,7 +367,7 @@ def RunAll(
                     rank_lookup=rank_lookup,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
-                    filtered_buy_symbols=filtered_buy_symbol_set,
+                    filtered_symbols=filtered_symbol_set,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -357,7 +378,7 @@ def RunAll(
                     rank_lookup=rank_lookup,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
-                    filtered_buy_symbols=filtered_buy_symbol_set,
+                    filtered_symbols=filtered_symbol_set,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -368,7 +389,7 @@ def RunAll(
                     rank_lookup=rank_lookup,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
-                    filtered_buy_symbols=filtered_buy_symbol_set,
+                    filtered_symbols=filtered_symbol_set,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -379,12 +400,12 @@ def RunAll(
                     rank_lookup=rank_lookup,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
-                    filtered_buy_symbols=filtered_buy_symbol_set,
+                    filtered_symbols=filtered_symbol_set,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
             ),
-            "momentum": filtered_buy_universe,
+            "momentum": filtered_universe,
         }
 
         if live_run_record_path is not None:
