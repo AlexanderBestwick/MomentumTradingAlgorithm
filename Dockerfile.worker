@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    MPLCONFIGDIR=/tmp/matplotlib
 
 WORKDIR /app
 
@@ -17,15 +19,22 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-worker.txt
 
 COPY Config.py ./
+COPY Backtesting.py ./
+COPY BacktestingFundFlows.py ./
 COPY App ./App
+COPY Database ./Database
 COPY Execution ./Execution
-COPY Market ./Market
-COPY Strategies ./Strategies
-COPY SiteData ./SiteData
 COPY Functions ./Functions
-COPY Data/holdings-daily-us-en-sptm.csv ./Data/holdings-daily-us-en-sptm.csv
+COPY Funds ./Funds
+COPY Market ./Market
+COPY SiteData ./SiteData
+COPY Strategies ./Strategies
 COPY worker ./worker
+COPY Data/holdings-daily-us-en-sptm.csv ./Data/holdings-daily-us-en-sptm.csv
 
-RUN mkdir -p Data/live_run_records
+RUN mkdir -p \
+    Data/live_run_records \
+    frontend/data \
+    /tmp/matplotlib
 
 CMD ["python", "worker/run_live.py"]

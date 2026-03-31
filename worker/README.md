@@ -1,6 +1,6 @@
 # Trading Worker
 
-This worker packages the existing strategy code for scheduled execution in AWS.
+This worker packages the existing strategy code for scheduled execution in AWS. Build from [Dockerfile.worker](/home/alexa/Documents/GitHub/MomentumTradingAlgorithm/Dockerfile.worker), and use command overrides when you want the same image to run a backtest entrypoint instead of the live worker.
 
 ## What it runs
 
@@ -12,14 +12,20 @@ It keeps the current strategy behavior intact and packages the app-oriented modu
 
 Build the image from the repo root:
 
-```powershell
-docker build -f Dockerfile.worker -t momentum-worker .
+```bash
+docker build -f Dockerfile.worker -t momentum-app .
 ```
 
 Run it against your paper account:
 
-```powershell
-docker run --rm --env-file .env momentum-worker
+```bash
+docker run --rm --env-file .env momentum-app
+```
+
+Run the fund-flow backtest instead by overriding the command:
+
+```bash
+docker run --rm -v "$(pwd)/Data:/app/Data" --env-file .env momentum-app python BacktestingFundFlows.py
 ```
 
 ## Environment variables
