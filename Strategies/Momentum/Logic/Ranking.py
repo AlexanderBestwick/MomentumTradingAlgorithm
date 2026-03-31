@@ -6,8 +6,8 @@ import numpy as np
 from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import talib as ta
-from Functions.PositionCap import capped_target_shares
-from Functions.TradingDays import trim_multiindex_to_trailing_trading_days
+from Strategies.Momentum.Logic.PositionSizing import capped_target_shares
+from Strategies.Momentum.Logic.TradingDays import trim_multiindex_to_trailing_trading_days
 
 def LoadApprovedBars(csv_path="Data/ApprovedStockFrame.csv", *, days_back=30, as_of_date=None):
     df = pd.read_csv(csv_path, parse_dates=["timestamp"])

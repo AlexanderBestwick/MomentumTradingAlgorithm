@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from Config import get_alpaca_credentials
-from FullRun import RunAll, build_live_clients
+from App.LiveRebalance import RunAll, build_live_clients
 from SiteData.Publisher import (
     DEFAULT_LIVE_HISTORY_LIMIT,
     DEFAULT_SITE_DATA_ROOT,

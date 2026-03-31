@@ -3,18 +3,26 @@ import sys
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from Config import get_alpaca_credentials
-from Functions.Is2ndWeek import second_week
-from Functions.LiveRunSafety import (
+from App.LiveRunSafety import (
     begin_live_run_record,
     ensure_market_is_open,
     finish_live_run_record,
     get_live_clock_info,
 )
-import MarketIndicator
-import ViableStockList
-import LinearRegression
-import PortfolioBalancer
-import RiskBalancer
+from Strategies.Momentum.Logic.PortfolioBalancer import (
+    allocate_defensive_position,
+    close_positions,
+    open_positions,
+)
+from Strategies.Momentum.Logic.RiskBalancer import (
+    buy_underrisked,
+    sell_above_cap,
+    sell_overrisked,
+)
+from Strategies.Momentum.Logic.MarketIndicator import MarketIndicator
+from Strategies.Momentum.Logic.Ranking import LinearRegression
+from Strategies.Momentum.Logic.RebalanceSchedule import second_week
+from Strategies.Momentum.Logic.UniverseSelection import BuildSelectionUniverse
 
 
 def _run_step(step_name, func, *args, **kwargs):
@@ -185,7 +193,7 @@ def RunAll(
         # 1) Market health - required before new buys.
         market_health = _run_step(
             f"Market health check for {run_date.isoformat()}",
-            MarketIndicator.MarketIndicator,
+            MarketIndicator,
             data_client,
             as_of_date=run_date,
         )
@@ -194,7 +202,7 @@ def RunAll(
         # 2) Build full universe once, then keep the existing filters unchanged.
         selection_universe = _run_step(
             f"Universe selection for {run_date.isoformat()}",
-            ViableStockList.BuildSelectionUniverse,
+            BuildSelectionUniverse,
             data_client,
             as_of_date=run_date,
             save_path=approved_save_path,
@@ -206,7 +214,7 @@ def RunAll(
         # 3) Rank the full index first.
         full_ranked_universe = _run_step(
             f"Momentum ranking for {run_date.isoformat()}",
-            LinearRegression.LinearRegression,
+            LinearRegression,
             trading_client,
             selection_universe["full_stock_df"],
             save_path=momentum_save_path,
@@ -240,14 +248,14 @@ def RunAll(
         target_symbols = filtered_symbol_set
         closed = _run_step(
             f"Position close step for {run_date.isoformat()}",
-            PortfolioBalancer.close_positions,
+            close_positions,
             trading_client,
             target_symbols,
             protected_symbols=protected_symbols,
         )
         capped_sells = _run_step(
             f"Position cap enforcement step for {run_date.isoformat()}",
-            RiskBalancer.sell_above_cap,
+            sell_above_cap,
             trading_client,
             data_client,
             max_position_fraction=max_position_fraction,
@@ -263,7 +271,7 @@ def RunAll(
             print("Risk Balancing in Progress: Do not interrupt")
             overrisked = _run_step(
                 f"Risk reduction step for {run_date.isoformat()}",
-                RiskBalancer.sell_overrisked,
+                sell_overrisked,
                 trading_client,
                 filtered_universe,
                 protected_symbols=rebalance_protected_symbols,
@@ -271,7 +279,7 @@ def RunAll(
             if market_health:
                 underrisked = _run_step(
                     f"Risk rebalance buy step for {run_date.isoformat()}",
-                    RiskBalancer.buy_underrisked,
+                    buy_underrisked,
                     trading_client,
                     data_client,
                     filtered_universe,
@@ -292,7 +300,7 @@ def RunAll(
         if market_health:
             opened = _run_step(
                 f"New position opening step for {run_date.isoformat()}",
-                PortfolioBalancer.open_positions,
+                open_positions,
                 trading_client,
                 data_client,
                 filtered_universe,
@@ -307,7 +315,7 @@ def RunAll(
 
         defensive_buys = _run_step(
             f"Defensive allocation step for {run_date.isoformat()}",
-            PortfolioBalancer.allocate_defensive_position,
+            allocate_defensive_position,
             trading_client,
             data_client,
             market_health,

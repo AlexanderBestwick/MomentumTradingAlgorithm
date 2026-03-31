@@ -2,7 +2,11 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.requests import OrderRequest
 from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 import time
-from Functions.PositionCap import capped_target_shares, max_position_shares, remaining_capacity_shares
+from Strategies.Momentum.Logic.PositionSizing import (
+    capped_target_shares,
+    max_position_shares,
+    remaining_capacity_shares,
+)
 
 
 def sell_above_cap(trading_client, data_client, *, max_position_fraction=0.10, protected_symbols=None):
@@ -171,6 +175,4 @@ def buy_underrisked(
             raise RuntimeError(f"Failed to increase underrisked position for {sym}") from exc
 
     return bought
-
-
 

@@ -4,9 +4,9 @@ This worker packages the existing strategy code for scheduled execution in AWS.
 
 ## What it runs
 
-The container entrypoint is [worker/run_live.py](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/worker/run_live.py), which calls [FullRun.py](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/FullRun.py) using environment-driven settings.
+The container entrypoint is [worker/run_live.py](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/worker/run_live.py), which calls [LiveRebalance.py](/home/alexa/Documents/GitHub/MomentumTradingAlgorithm/App/LiveRebalance.py) using environment-driven settings.
 
-It keeps your current code layout intact and adds a deployment wrapper around it.
+It keeps the current strategy behavior intact and packages the app-oriented module layout for scheduled execution.
 
 ## Local Docker test
 

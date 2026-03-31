@@ -7,6 +7,7 @@ The current default website flow publishes JSON files directly for the frontend 
 ## Files
 
 - `BacktestStore.py`: schema creation, inserts, and query helpers
+- `FundStore.py`: schema creation and query helpers for pooled funds, units, investors, and fund-level cash flows
 
 ## Tables
 
@@ -28,6 +29,27 @@ The current default website flow publishes JSON files directly for the frontend 
 - `live_run_positions`
   - end-of-run live position snapshot
 
+- `funds`
+  - one row per pooled fund / vehicle
+
+- `fund_investors`
+  - one row per investor profile
+
+- `fund_memberships`
+  - which investors belong to which funds
+
+- `fund_cash_flows`
+  - pending and executed contributions / withdrawals
+
+- `fund_nav_snapshots`
+  - fund valuation snapshots with total units and unit price
+
+- `fund_unit_ledger`
+  - unit issuance / redemption entries per investor
+
+- `fund_strategy_allocations`
+  - sleeve weights for strategy modules inside a fund
+
 ## Default database path
 
 By default the backtest database is written to:
@@ -39,6 +61,9 @@ That path is configured from [Backtesting.py](/c:/Users/alexa/Documents/GitHub/M
 ## AWS / PostgreSQL
 
 The storage layer also supports a PostgreSQL connection URL.
+
+For the new pooled-fund / unit-accounting work, PostgreSQL is the recommended
+production target rather than SQLite.
 
 Examples:
 

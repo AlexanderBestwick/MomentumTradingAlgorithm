@@ -17,12 +17,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-worker.txt
 
 COPY Config.py ./
-COPY FullRun.py ./
-COPY MarketIndicator.py ./
-COPY ViableStockList.py ./
-COPY LinearRegression.py ./
-COPY PortfolioBalancer.py ./
-COPY RiskBalancer.py ./
+COPY App ./App
+COPY Execution ./Execution
+COPY Market ./Market
+COPY Strategies ./Strategies
 COPY SiteData ./SiteData
 COPY Functions ./Functions
 COPY Data/holdings-daily-us-en-sptm.csv ./Data/holdings-daily-us-en-sptm.csv

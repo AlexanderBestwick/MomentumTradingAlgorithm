@@ -14,7 +14,7 @@ from matplotlib.transforms import blended_transform_factory
 import pandas as pd
 
 from Config import get_alpaca_credentials, load_local_env
-from FullRun import RunAll
+from App.LiveRebalance import RunAll
 from SiteData.Publisher import (
     DEFAULT_BACKTEST_HISTORY_LIMIT,
     DEFAULT_SITE_DATA_ROOT,
@@ -22,8 +22,8 @@ from SiteData.Publisher import (
     publish_backtest_run,
     upload_site_data_to_s3,
 )
-from Functions.TradingDays import calendar_days_for_trading_window
-from ViableStockList import load_snp1500_symbols
+from Strategies.Momentum.Logic.TradingDays import calendar_days_for_trading_window
+from Strategies.Momentum.Logic.UniverseSelection import load_snp1500_symbols
 
 
 load_local_env()
@@ -40,20 +40,20 @@ DEFAULT_AWS_REGION = os.getenv("AWS_REGION")
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2017-02-01"
-EDITOR_END_DATE = "2026-02-01"
+EDITOR_START_DATE = "2019-10-01"
+EDITOR_END_DATE = "2020-08-01"
 EDITOR_INITIAL_CASH = 100000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")
 EDITOR_CHART_PATH = Path("Data/BacktestResults.png")
-EDITOR_CACHE_PATH = None #Path("Data/backtest_cache_20160517_20260201(Long).PKL")
+EDITOR_CACHE_PATH = Path("Data/backtest_cache_20160517_20260201(Long).PKL")
 EDITOR_BATCH_SIZE = 400
 EDITOR_WARMUP_DAYS = 260  # trading days
 EDITOR_RUN_ON_SCHEDULE_ONLY = True
 EDITOR_STRATEGY_WEEKDAY = 2  # Monday=0, Tuesday=1, Wednesday=2
 EDITOR_RAW_RANK_CONSIDERATION_LIMIT = 100
 EDITOR_MAX_POSITION_FRACTION = 0.10
-EDITOR_DEFENSIVE_MODE = "treasury_bonds"  # "cash" or "treasury_bonds"
+EDITOR_DEFENSIVE_MODE = "cash"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005

@@ -2,7 +2,7 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.requests import OrderRequest
 from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 import time
-from Functions.PositionCap import capped_target_shares
+from Strategies.Momentum.Logic.PositionSizing import capped_target_shares
 
 
 def close_positions(trading_client, target_symbols, protected_symbols=None):

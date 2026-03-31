@@ -10,7 +10,10 @@ import itertools
 from pathlib import Path
 import pandas as pd
 import re
-from Functions.TradingDays import calendar_days_for_trading_window, trim_multiindex_to_trailing_trading_days
+from Strategies.Momentum.Logic.TradingDays import (
+    calendar_days_for_trading_window,
+    trim_multiindex_to_trailing_trading_days,
+)
 
 DEFAULT_HOLDINGS_PATH = "Data/holdings-daily-us-en-sptm.csv"
 

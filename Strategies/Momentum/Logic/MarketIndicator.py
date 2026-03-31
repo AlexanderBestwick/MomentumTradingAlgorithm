@@ -1,7 +1,10 @@
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 import datetime
-from Functions.TradingDays import calendar_days_for_trading_window, trim_single_symbol_to_trailing_trading_days
+from Strategies.Momentum.Logic.TradingDays import (
+    calendar_days_for_trading_window,
+    trim_single_symbol_to_trailing_trading_days,
+)
 
 
 def MarketIndicator(client, *, symbol="SPTM", lookback_days=200, as_of_date=None):
