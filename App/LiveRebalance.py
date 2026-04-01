@@ -156,7 +156,9 @@ def RunAll(
     defensive_symbol="SGOV",
     raw_rank_consideration_limit=80,
     max_position_fraction=0.10,
+    cash_buffer=10.0,
     enforce_live_safeguards=True,
+    ignore_once_per_day_check=False,
 ):
     if trading_client is None or data_client is None:
         trading_client, data_client = build_live_clients()
@@ -177,16 +179,22 @@ def RunAll(
                 f"{live_clock_info.market_date.isoformat()} from Alpaca clock."
             )
 
-        live_run_record_path = begin_live_run_record(
-            run_date,
-            live_clock_info=live_clock_info,
-        )
+        if ignore_once_per_day_check:
+            print(
+                "Warning: IGNORE_ONCE_PER_DAY_CHECK is enabled. "
+                "Skipping duplicate live-run protection for this market day."
+            )
+        else:
+            live_run_record_path = begin_live_run_record(
+                run_date,
+                live_clock_info=live_clock_info,
+            )
     elif run_date is None:
         run_date = date.today()
 
     approved_save_path = "Data/ApprovedStockFrame.csv" if save_outputs else None
     momentum_save_path = "Data/MomentumResults.csv" if save_outputs else None
-    sleep_seconds = 0 if is_backtest else 2
+    sleep_seconds = 0 if is_backtest else 5
 
     try:
         print()
@@ -284,6 +292,7 @@ def RunAll(
                     data_client,
                     filtered_universe,
                     market_health,
+                    cash_buffer=cash_buffer,
                     sleep_seconds=sleep_seconds,
                     max_position_fraction=max_position_fraction,
                     protected_symbols=rebalance_protected_symbols,
@@ -306,6 +315,7 @@ def RunAll(
                 filtered_universe,
                 market_health,
                 top_n=raw_rank_consideration_limit,
+                cash_buffer=cash_buffer,
                 sleep_seconds=sleep_seconds,
                 max_position_fraction=max_position_fraction,
             )
@@ -321,6 +331,7 @@ def RunAll(
             market_health,
             mode=defensive_mode,
             defensive_symbol=defensive_symbol,
+            cash_buffer=cash_buffer,
         )
         print()
 
@@ -344,6 +355,7 @@ def RunAll(
             "defensive_symbol": defensive_symbol,
             "raw_rank_consideration_limit": raw_rank_consideration_limit,
             "max_position_fraction": max_position_fraction,
+            "cash_buffer": cash_buffer,
             "is_risk_rebalance_day": second_week(run_date),
             "action_details": (
                 _build_action_details(
@@ -430,6 +442,7 @@ def RunAll(
                     "underrisked_count": len(underrisked),
                     "capped_sells_count": len(capped_sells),
                     "defensive_buy_count": len(defensive_buys),
+                    "cash_buffer": cash_buffer,
                 },
             )
 

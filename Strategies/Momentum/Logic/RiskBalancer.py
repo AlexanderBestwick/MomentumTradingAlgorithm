@@ -137,7 +137,7 @@ def buy_underrisked(
                 f"capped target: {capped_target_qty:.2f}, deficit: {deficit:.2f}, cost est: {cost_estimate:.2f}"
             )
 
-            if remaining_balance >= cost_estimate + 2:
+            if remaining_balance >= cost_estimate + cash_buffer:
                 order = OrderRequest(
                     symbol=sym,
                     qty=deficit,
@@ -147,7 +147,7 @@ def buy_underrisked(
                 )
                 trading_client.submit_order(order)
                 print(f"{sym} bought {deficit:.2f} to balance (underrisked)")
-                remaining_balance -= cost_estimate
+                remaining_balance = max(0.0, remaining_balance - cost_estimate)
                 bought.append(sym)
             else:
                 if sleep_seconds > 0:
@@ -175,4 +175,3 @@ def buy_underrisked(
             raise RuntimeError(f"Failed to increase underrisked position for {sym}") from exc
 
     return bought
-

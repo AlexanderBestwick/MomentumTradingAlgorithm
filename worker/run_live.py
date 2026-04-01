@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import sys
 from datetime import datetime, timedelta, timezone
+import time
 
 from alpaca.common.enums import Sort
 from alpaca.trading.enums import QueryOrderStatus
@@ -13,6 +14,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from Config import get_alpaca_credentials
 from App.LiveRebalance import RunAll, build_live_clients
+from Funds.Accounting import DEFAULT_INITIAL_UNIT_PRICE
+from Funds.FundCycle import (
+    process_confirmed_cash_flows,
+    raise_cash_for_shortfall,
+    wrap_trading_client_with_cash_reserve,
+    write_latest_ledger_state,
+)
+from Funds.LedgerStore import FundLedgerStore
 from SiteData.Publisher import (
     DEFAULT_LIVE_HISTORY_LIMIT,
     DEFAULT_SITE_DATA_ROOT,
@@ -47,6 +56,68 @@ def _get_int_env(name, default):
 def _get_float_env(name, default):
     value = os.getenv(name)
     return default if value is None else float(value)
+
+
+def _resolve_cash_buffer(account_snapshot):
+    fixed_cash_buffer = _get_float_env("CASH_BUFFER", 10.0)
+    raw_percent = os.getenv("CASH_BUFFER_PERCENT")
+
+    if raw_percent is None:
+        return fixed_cash_buffer, "fixed"
+
+    cash_buffer_percent = float(raw_percent)
+    cash_buffer_min = _get_float_env("CASH_BUFFER_MIN", fixed_cash_buffer)
+    account_equity = float(account_snapshot["equity"])
+    computed_cash_buffer = max(cash_buffer_min, account_equity * cash_buffer_percent)
+    return computed_cash_buffer, f"percent({cash_buffer_percent:.4%})"
+
+
+def _is_running_in_aws():
+    aws_markers = (
+        os.getenv("ECS_CONTAINER_METADATA_URI_V4", "").strip(),
+        os.getenv("ECS_CONTAINER_METADATA_URI", "").strip(),
+        os.getenv("AWS_EXECUTION_ENV", "").strip(),
+    )
+    return any(aws_markers)
+
+
+def _should_upload_site_data_to_s3():
+    if not _get_bool_env("S3_PUBLISH_ENABLED", False):
+        return False, "disabled"
+
+    if _get_bool_env("S3_PUBLISH_ALLOW_LOCAL", False):
+        return True, "local_override"
+
+    if _is_running_in_aws():
+        return True, "aws_runtime"
+
+    return False, "local_runtime"
+
+
+def _build_fund_ledger_store():
+    enabled = _get_bool_env("FUND_LEDGER_ENABLED", False)
+    bucket_name = os.getenv("FUND_LEDGER_BUCKET", "").strip()
+    root_path = os.getenv("FUND_LEDGER_ROOT", "").strip()
+
+    if not enabled and not bucket_name and not root_path:
+        return None
+
+    fund_id = (
+        os.getenv("FUND_LEDGER_FUND_ID", "").strip()
+        or os.getenv("FUND_ID", "").strip()
+    )
+    if not fund_id:
+        raise RuntimeError(
+            "Fund ledger support requires FUND_LEDGER_FUND_ID or FUND_ID to be set."
+        )
+
+    return FundLedgerStore(
+        fund_id=fund_id,
+        bucket_name=bucket_name or None,
+        prefix=os.getenv("FUND_LEDGER_PREFIX", "funds"),
+        root_path=root_path or None,
+        aws_region=os.getenv("AWS_REGION", "").strip() or None,
+    )
 
 
 def _snapshot_account(trading_client):
@@ -194,43 +265,128 @@ def main():
     max_position_fraction = _get_float_env("MAX_POSITION_FRACTION", 0.10)
     save_outputs = _get_bool_env("SAVE_OUTPUTS", True)
     enforce_live_safeguards = _get_bool_env("ENFORCE_LIVE_SAFEGUARDS", True)
+    ignore_once_per_day_check = _get_bool_env("IGNORE_ONCE_PER_DAY_CHECK", False)
+    ignore_ledger_effective_at = _get_bool_env("IGNORE_LEDGER_EFFECTIVE_AT", False)
     export_site_data = _get_bool_env("EXPORT_SITE_DATA", True)
     site_data_root = os.getenv("SITE_DATA_ROOT", str(DEFAULT_SITE_DATA_ROOT))
     live_history_limit = _get_int_env("LIVE_HISTORY_LIMIT", DEFAULT_LIVE_HISTORY_LIMIT)
-    s3_publish_enabled = _get_bool_env("S3_PUBLISH_ENABLED", False)
+    s3_publish_enabled, s3_publish_reason = _should_upload_site_data_to_s3()
     s3_bucket_name = os.getenv("S3_BUCKET_NAME")
     s3_prefix = os.getenv("S3_PREFIX", "")
     aws_region = os.getenv("AWS_REGION")
     live_run_source = os.getenv("LIVE_RUN_SOURCE", "ecs_worker")
+    fund_initial_unit_price = _get_float_env("FUND_INITIAL_UNIT_PRICE", DEFAULT_INITIAL_UNIT_PRICE)
+    withdrawal_cash_raise_buffer_percent = _get_float_env(
+        "WITHDRAWAL_CASH_RAISE_BUFFER_PERCENT",
+        0.001,
+    )
 
-    trading_client, data_client = build_live_clients()
-    initial_account = _snapshot_account(trading_client)
+    broker_trading_client, data_client = build_live_clients()
+    strategy_trading_client = broker_trading_client
+    initial_account = _snapshot_account(broker_trading_client)
+    cash_buffer, cash_buffer_mode = _resolve_cash_buffer(initial_account)
     generated_at = datetime.now(timezone.utc)
+    fund_ledger_store = _build_fund_ledger_store()
+    fund_cycle_summary = None
 
     print(
         "Starting momentum worker with "
         f"ALPACA_ENV={credentials.environment}, "
         f"defensive_mode={defensive_mode}, "
         f"raw_rank_limit={raw_rank_limit}, "
-        f"max_position_fraction={max_position_fraction:.2%}"
+        f"max_position_fraction={max_position_fraction:.2%}, "
+        f"cash_buffer={cash_buffer:.2f}, "
+        f"cash_buffer_mode={cash_buffer_mode}, "
+        f"withdrawal_cash_raise_buffer_percent={withdrawal_cash_raise_buffer_percent:.4%}"
     )
+    if os.getenv("S3_PUBLISH_ENABLED") is not None:
+        print(
+            "Site-data S3 upload mode: "
+            f"enabled={s3_publish_enabled}, reason={s3_publish_reason}"
+        )
+    if ignore_once_per_day_check:
+        print("Warning: duplicate-run protection is disabled for this run.")
+    if ignore_ledger_effective_at:
+        print("Warning: IGNORE_LEDGER_EFFECTIVE_AT is enabled. All confirmed cash flows will execute on this run.")
 
     try:
+        if fund_ledger_store is not None:
+            fund_cycle_summary = process_confirmed_cash_flows(
+                fund_ledger_store,
+                valued_at=generated_at,
+                gross_asset_value=initial_account["equity"],
+                cash_value=initial_account["cash"],
+                initial_unit_price=fund_initial_unit_price,
+                source_run_id=f"{generated_at:%Y%m%dT%H%M%S}",
+                note=f"Processed by {live_run_source}",
+                ignore_effective_at=ignore_ledger_effective_at,
+            )
+            active_fund_state = fund_cycle_summary["latest_state"]
+            cash_shortfall = float(active_fund_state["fund_nav"].get("cash_shortfall", 0.0) or 0.0)
+
+            if cash_shortfall > 0:
+                print(
+                    "Outstanding withdrawal shortfall detected: "
+                    f"{cash_shortfall:.2f}. Selling positions proportionally before new buys."
+                )
+                cash_raise_summary = raise_cash_for_shortfall(
+                    broker_trading_client,
+                    cash_shortfall,
+                    oversell_buffer_percent=withdrawal_cash_raise_buffer_percent,
+                )
+                fund_cycle_summary["cash_raise"] = cash_raise_summary
+
+                wait_seconds = _get_float_env("FUND_LEDGER_SHORTFALL_WAIT_SECONDS", 2.0)
+                if cash_raise_summary["submitted_orders"] and wait_seconds > 0:
+                    time.sleep(wait_seconds)
+
+                refreshed_account = _snapshot_account(broker_trading_client)
+                active_fund_state = write_latest_ledger_state(
+                    fund_ledger_store,
+                    valued_at=datetime.now(timezone.utc),
+                    gross_asset_value=refreshed_account["equity"],
+                    cash_value=refreshed_account["cash"],
+                    initial_unit_price=fund_initial_unit_price,
+                    source_run_id=f"{generated_at:%Y%m%dT%H%M%S}",
+                    note=f"Refreshed after cash raise by {live_run_source}",
+                )
+                fund_cycle_summary["latest_state"] = active_fund_state
+
+                remaining_shortfall = float(active_fund_state["fund_nav"].get("cash_shortfall", 0.0) or 0.0)
+                if remaining_shortfall > 0:
+                    print(
+                        "Warning: cash shortfall remains after pre-trade liquidation: "
+                        f"{remaining_shortfall:.2f}"
+                    )
+
+            reserved_cash = float(active_fund_state.get("cash_reserve", 0.0) or 0.0)
+            strategy_trading_client = wrap_trading_client_with_cash_reserve(
+                broker_trading_client,
+                reserved_cash,
+            )
+            print(
+                "Processed fund ledger with "
+                f"executed_count={fund_cycle_summary['executed_count']}, "
+                f"cash_reserve={reserved_cash:.2f}"
+            )
+
         result = RunAll(
-            trading_client=trading_client,
+            trading_client=strategy_trading_client,
             data_client=data_client,
             save_outputs=save_outputs,
             defensive_mode=defensive_mode,
             defensive_symbol=defensive_symbol,
             raw_rank_consideration_limit=raw_rank_limit,
             max_position_fraction=max_position_fraction,
+            cash_buffer=cash_buffer,
             enforce_live_safeguards=enforce_live_safeguards,
+            ignore_once_per_day_check=ignore_once_per_day_check,
         )
     except Exception as exc:
         if export_site_data:
-            portfolio_history, total_fees_paid = _fetch_portfolio_history(trading_client)
+            portfolio_history, total_fees_paid = _fetch_portfolio_history(broker_trading_client)
             recent_orders = _fetch_recent_orders(
-                trading_client,
+                broker_trading_client,
                 after_time=generated_at,
                 action_details=[],
             )
@@ -239,8 +395,8 @@ def main():
                 environment=credentials.environment,
                 trigger_source=live_run_source,
                 initial_account=initial_account,
-                final_account=_snapshot_account(trading_client),
-                final_positions=_snapshot_positions(trading_client),
+                final_account=_snapshot_account(broker_trading_client),
+                final_positions=_snapshot_positions(broker_trading_client),
                 portfolio_history=portfolio_history,
                 recent_orders=recent_orders,
                 total_fees_paid=total_fees_paid,
@@ -276,13 +432,31 @@ def main():
                 print(f"Uploaded {len(uploaded_paths)} failed live-run files to s3://{s3_bucket_name}")
         raise
 
-    final_account = _snapshot_account(trading_client)
-    final_positions = _snapshot_positions(trading_client)
+    final_account = _snapshot_account(broker_trading_client)
+    final_positions = _snapshot_positions(broker_trading_client)
+
+    if fund_ledger_store is not None:
+        latest_fund_state = write_latest_ledger_state(
+            fund_ledger_store,
+            valued_at=datetime.now(timezone.utc),
+            gross_asset_value=final_account["equity"],
+            cash_value=final_account["cash"],
+            initial_unit_price=fund_initial_unit_price,
+            source_run_id=f"{generated_at:%Y%m%dT%H%M%S}",
+            note=f"Refreshed after {live_run_source}",
+        )
+        result["fund_cycle"] = fund_cycle_summary
+        result["fund_latest_state"] = latest_fund_state["fund_nav"]
+        print(
+            "Updated fund ledger latest state with "
+            f"unit_price={latest_fund_state['fund_nav']['unit_price']:.4f}, "
+            f"total_units={latest_fund_state['fund_nav']['total_units']:.6f}"
+        )
 
     if export_site_data:
-        portfolio_history, total_fees_paid = _fetch_portfolio_history(trading_client)
+        portfolio_history, total_fees_paid = _fetch_portfolio_history(broker_trading_client)
         recent_orders = _fetch_recent_orders(
-            trading_client,
+            broker_trading_client,
             after_time=generated_at,
             action_details=result.get("action_details", []),
         )

@@ -29,7 +29,7 @@ def open_positions(
     market_health,
     top_n=80,
     cash_buffer=1,
-    sleep_seconds=2,
+    sleep_seconds=3,
     max_position_fraction=0.10,
 ):
     """Open new positions from momentum list (only in healthy markets)."""
@@ -65,7 +65,7 @@ def open_positions(
 
             cost_estimate = price * shares
 
-            if remaining_balance >= cost_estimate + 2:
+            if remaining_balance >= cost_estimate + cash_buffer:
                 order = OrderRequest(
                     symbol=sym,
                     qty=shares,
@@ -75,7 +75,7 @@ def open_positions(
                 )
                 trading_client.submit_order(order)
                 print(f"Bought {shares:.2f} {sym}, cost estimate {cost_estimate:.2f}")
-                remaining_balance -= cost_estimate
+                remaining_balance = max(0.0, remaining_balance - cost_estimate)
                 buys.append(sym)
             else:
                 if sleep_seconds > 0:

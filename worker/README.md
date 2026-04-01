@@ -44,16 +44,27 @@ Optional worker settings:
 - `DEFENSIVE_SYMBOL=SGOV`
 - `RAW_RANK_CONSIDERATION_LIMIT=80`
 - `MAX_POSITION_FRACTION=0.10`
+- `CASH_BUFFER=10`
+- `CASH_BUFFER_PERCENT=0.001`
+- `CASH_BUFFER_MIN=10`
 - `SAVE_OUTPUTS=true`
 - `ENFORCE_LIVE_SAFEGUARDS=true`
+- `IGNORE_ONCE_PER_DAY_CHECK=false`
+- `IGNORE_LEDGER_EFFECTIVE_AT=false`
+- `WITHDRAWAL_CASH_RAISE_BUFFER_PERCENT=0.001`
 - `EXPORT_SITE_DATA=true`
 - `SITE_DATA_ROOT=frontend/data`
 - `LIVE_HISTORY_LIMIT=30`
 - `S3_PUBLISH_ENABLED=true`
+- `S3_PUBLISH_ALLOW_LOCAL=false`
 - `S3_BUCKET_NAME=momentum-run-data`
 - `S3_PREFIX=`
 - `AWS_REGION=eu-west-2`
 - `LIVE_RUN_SOURCE=ecs_worker`
+
+`CASH_BUFFER` remains the fixed-dollar fallback. If you set `CASH_BUFFER_PERCENT`, the worker will instead use `max(CASH_BUFFER_MIN, equity * CASH_BUFFER_PERCENT)`. For example, `CASH_BUFFER_PERCENT=0.001` keeps back about `0.1%` of account equity, with `CASH_BUFFER_MIN` acting as the minimum floor.
+
+`WITHDRAWAL_CASH_RAISE_BUFFER_PERCENT` applies only to withdrawal funding. For example, `0.001` tells the worker to try to sell about `0.1%` more than the current withdrawal cash shortfall so small fill differences are less likely to leave the account underfunded.
 
 ## AWS structure
 
@@ -77,4 +88,7 @@ Recommended first deployment shape:
 ## Important note
 
 The worker image includes [Data/holdings-daily-us-en-sptm.csv](/c:/Users/alexa/Documents/GitHub/MomentumTradingAlgorithm/Data/holdings-daily-us-en-sptm.csv), but it intentionally excludes the rest of `Data/` from the Docker build context.
-Live run results are now published as website-facing JSON under `frontend/data/live/`. If `S3_PUBLISH_ENABLED=true`, those same published files are also uploaded to S3.
+Live run results are now published as website-facing JSON under `frontend/data/live/`.
+If `S3_PUBLISH_ENABLED=true`, the worker only uploads those files to S3 when it is running inside AWS/ECS.
+Local runs skip the S3 upload by default, even if the flag is set in `.env`.
+If you intentionally want a local run to upload, set `S3_PUBLISH_ALLOW_LOCAL=true`.

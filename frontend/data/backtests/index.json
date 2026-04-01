@@ -1,8 +1,45 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-03-31T15:45:20.095042+00:00",
-  "latest_run_id": "20260331T154520_20191001_20200801",
+  "updated_at": "2026-04-01T13:26:28.838394+00:00",
+  "latest_run_id": "20260401T132628_20170201_20260201",
   "runs": [
+    {
+      "id": "20260401T132628_20170201_20260201",
+      "generated_at": "2026-04-01T13:26:28.838394+00:00",
+      "period": {
+        "start": "2017-02-01",
+        "end": "2026-02-01",
+        "label": "2017-02-01 to 2026-02-01"
+      },
+      "summary": {
+        "initial_cash": 100000.0,
+        "benchmark_symbol": "SPTM",
+        "final_portfolio_value": 368523.4455184292,
+        "final_benchmark_value": 342472.4602203182,
+        "portfolio_return_percent": 268.52344551842924,
+        "benchmark_return_percent": 242.4724602203182,
+        "alpha_percent": 26.050985298111044,
+        "alpha_dollars": 26050.985298111045,
+        "final_reserve_percentage": 0.0,
+        "reserve_label": "Treasury % of Portfolio",
+        "positions_final": 37,
+        "trade_count": 3174,
+        "strategy_run_count": 463,
+        "fees_paid_cumulative": 13673.451595262215,
+        "max_drawdown_percent": -31.660790563781273,
+        "defensive_mode": "treasury_bonds",
+        "defensive_symbol": "IEI",
+        "raw_rank_consideration_limit": 100,
+        "max_position_fraction": 0.1,
+        "trade_fee_flat": 1.0,
+        "trade_fee_rate": 0.0005,
+        "elapsed_seconds": 2226.764022897999,
+        "elapsed_label": "37m 7s"
+      },
+      "detail_path": "./data/backtests/runs/20260401T132628_20170201_20260201.json",
+      "chart_path": "./data/backtests/charts/20260401T132628_20170201_20260201.png",
+      "results_path": "./data/backtests/results/20260401T132628_20170201_20260201.csv"
+    },
     {
       "id": "20260331T154520_20191001_20200801",
       "generated_at": "2026-03-31T15:45:20.095042+00:00",
