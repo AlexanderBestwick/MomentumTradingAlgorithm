@@ -211,3 +211,4 @@ __marimo__/
 Data/**
 !Data/
 !Data/holdings-daily-us-en-sptm.csv
+!Data/stat_arb_symbol_metadata.csv

@@ -1,0 +1,43 @@
+symbol,sector,industry,shortable,borrow_fee_bps,enabled
+NVDA,Technology,Semiconductors,TRUE,25,TRUE
+AMD,Technology,Semiconductors,TRUE,25,TRUE
+AVGO,Technology,Semiconductors,TRUE,25,TRUE
+QCOM,Technology,Semiconductors,TRUE,25,TRUE
+TXN,Technology,Semiconductors,TRUE,25,TRUE
+MU,Technology,Semiconductors,TRUE,30,TRUE
+AMAT,Technology,Semiconductor Equipment,TRUE,25,TRUE
+LRCX,Technology,Semiconductor Equipment,TRUE,25,TRUE
+KLAC,Technology,Semiconductor Equipment,TRUE,25,TRUE
+MSFT,Technology,Systems Software,TRUE,20,TRUE
+ORCL,Technology,Systems Software,TRUE,25,TRUE
+ADBE,Technology,Application Software,TRUE,30,TRUE
+CRM,Technology,Application Software,TRUE,30,TRUE
+INTU,Technology,Application Software,TRUE,30,TRUE
+NOW,Technology,Application Software,TRUE,35,TRUE
+JPM,Financials,Diversified Banks,TRUE,20,TRUE
+BAC,Financials,Diversified Banks,TRUE,20,TRUE
+WFC,Financials,Diversified Banks,TRUE,20,TRUE
+C,Financials,Diversified Banks,TRUE,25,TRUE
+USB,Financials,Regional Banks,TRUE,25,TRUE
+PNC,Financials,Regional Banks,TRUE,25,TRUE
+TFC,Financials,Regional Banks,TRUE,30,TRUE
+XOM,Energy,Integrated Oil and Gas,TRUE,20,TRUE
+CVX,Energy,Integrated Oil and Gas,TRUE,20,TRUE
+COP,Energy,Oil and Gas Exploration and Production,TRUE,30,TRUE
+EOG,Energy,Oil and Gas Exploration and Production,TRUE,35,TRUE
+OXY,Energy,Oil and Gas Exploration and Production,TRUE,35,TRUE
+MRK,Health Care,Pharmaceuticals,TRUE,20,TRUE
+PFE,Health Care,Pharmaceuticals,TRUE,20,TRUE
+BMY,Health Care,Pharmaceuticals,TRUE,20,TRUE
+ABBV,Health Care,Pharmaceuticals,TRUE,25,TRUE
+LLY,Health Care,Pharmaceuticals,TRUE,25,TRUE
+UNH,Health Care,Managed Care,TRUE,20,TRUE
+ELV,Health Care,Managed Care,TRUE,25,TRUE
+HUM,Health Care,Managed Care,TRUE,30,TRUE
+CI,Health Care,Managed Care,TRUE,25,TRUE
+HD,Consumer Discretionary,Home Improvement Retail,TRUE,25,TRUE
+LOW,Consumer Discretionary,Home Improvement Retail,TRUE,25,TRUE
+UPS,Industrials,Air Freight and Logistics,TRUE,25,TRUE
+FDX,Industrials,Air Freight and Logistics,TRUE,25,TRUE
+TMO,Health Care,Life Sciences Tools and Services,TRUE,25,TRUE
+DHR,Health Care,Life Sciences Tools and Services,TRUE,25,TRUE
