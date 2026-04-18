@@ -369,6 +369,35 @@ function buildPolylinePoints(values, bounds, dimensions) {
         .join(" ");
 }
 
+function trimLeadingUnfundedLiveSeries(series) {
+    if (!series || typeof series !== "object") {
+        return null;
+    }
+
+    const timestamps = safeArray(series.timestamps);
+    const equity = safeArray(series.equity);
+    const profitLoss = safeArray(series.profit_loss);
+    const profitLossPct = safeArray(series.profit_loss_pct);
+
+    let startIndex = equity.findIndex((value) => {
+        const numeric = asNumber(value);
+        return numeric !== null && numeric > 0;
+    });
+
+    if (startIndex === -1) {
+        startIndex = 0;
+    }
+
+    return {
+        ...series,
+        timestamps: timestamps.slice(startIndex),
+        equity: equity.slice(startIndex),
+        profit_loss: profitLoss.slice(startIndex),
+        profit_loss_pct: profitLossPct.slice(startIndex),
+        base_value: asNumber(equity[startIndex]) ?? asNumber(series.base_value)
+    };
+}
+
 function scaleY(value, bounds, dimensions) {
     const usableHeight = dimensions.height - dimensions.top - dimensions.bottom;
     const denominator = Math.max(bounds.max - bounds.min, 1e-9);
@@ -1414,7 +1443,8 @@ function renderLiveChart(run) {
     }
 
     const selectedTimeframe = ensureSelectedLiveTimeframe(run);
-    const series = selectedTimeframe ? run.portfolio_history?.[selectedTimeframe] : null;
+    const rawSeries = selectedTimeframe ? run.portfolio_history?.[selectedTimeframe] : null;
+    const series = trimLeadingUnfundedLiveSeries(rawSeries);
 
     if (!series || safeArray(series.equity).length === 0) {
         empty.classList.remove("is-hidden");
