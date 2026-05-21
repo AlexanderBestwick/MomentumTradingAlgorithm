@@ -238,6 +238,25 @@ class SimulatedDataClient:
 
         return float(subset["close"].iloc[-1])
 
+    def get_previous_close_price(self, symbol):
+        if self.current_date is None:
+            raise ValueError("Current backtest date has not been set.")
+
+        frame = self._frames.get(symbol)
+        if frame is None or frame.empty:
+            raise KeyError(f"No historical data loaded for {symbol}.")
+
+        subset = frame.loc[frame.index < self.current_date]
+        if subset.empty:
+            raise KeyError(
+                f"No previous close available for {symbol} before {self.current_date.date()}."
+            )
+
+        return float(subset["close"].iloc[-1])
+
+    def get_execution_price(self, symbol):
+        return self.get_previous_close_price(symbol)
+
     def get_stock_bars(self, request):
         if self.current_date is None:
             raise ValueError("Current backtest date has not been set.")
@@ -272,7 +291,7 @@ class SimulatedDataClient:
     def get_stock_latest_trade(self, request):
         latest_trades = {}
         for symbol in _normalize_symbols(request.symbol_or_symbols):
-            latest_trades[symbol] = SimpleNamespace(price=self.get_latest_price(symbol))
+            latest_trades[symbol] = SimpleNamespace(price=self.get_execution_price(symbol))
         return latest_trades
 
 
@@ -300,10 +319,17 @@ class SimulatedTradingClient:
             total += qty * self.data_client.get_latest_price(symbol)
         return total
 
+    @property
+    def execution_portfolio_value(self):
+        total = self.cash
+        for symbol, qty in self.positions.items():
+            total += qty * self.data_client.get_execution_price(symbol)
+        return total
+
     def get_account(self):
         return SimpleNamespace(
             cash=f"{self.cash:.2f}",
-            portfolio_value=f"{self.portfolio_value:.2f}",
+            portfolio_value=f"{self.execution_portfolio_value:.2f}",
         )
 
     def get_position_value(self, symbol):
@@ -326,7 +352,7 @@ class SimulatedTradingClient:
                 SimpleNamespace(
                     symbol=symbol,
                     qty=f"{qty:.10f}",
-                    market_value=f"{qty * self.data_client.get_latest_price(symbol):.2f}",
+                    market_value=f"{qty * self.data_client.get_execution_price(symbol):.2f}",
                 )
             )
         return positions
@@ -336,7 +362,7 @@ class SimulatedTradingClient:
         if held_qty <= 0:
             raise ValueError(f"No open position in {symbol} to close.")
 
-        price = self.data_client.get_latest_price(symbol)
+        price = self.data_client.get_execution_price(symbol)
         trade_notional = held_qty * price
         fee = self._calculate_trade_fee(trade_notional)
         net_proceeds = trade_notional - fee
@@ -359,7 +385,7 @@ class SimulatedTradingClient:
     def submit_order(self, order):
         symbol = order.symbol
         side = getattr(order.side, "value", str(order.side)).lower()
-        price = self.data_client.get_latest_price(symbol)
+        price = self.data_client.get_execution_price(symbol)
 
         qty = getattr(order, "qty", None)
         notional = getattr(order, "notional", None)
@@ -681,20 +707,32 @@ def run_backtest(
     for step_number, timestamp in enumerate(benchmark_index, start=1):
         run_date = timestamp.date()
         trading_client.set_current_date(run_date)
+        previous_signal_dates = benchmark_frame.index[benchmark_frame.index < timestamp]
+        signal_date = previous_signal_dates[-1].date() if len(previous_signal_dates) else None
         strategy_ran = _should_run_strategy(
             run_date,
             run_on_schedule_only=run_on_schedule_only,
             strategy_weekday=strategy_weekday,
         )
+        if strategy_ran and signal_date is None:
+            print(
+                f"[{step_number}/{len(benchmark_index)}] Skipping strategy for {run_date.isoformat()}: "
+                "no prior trading day is available for signals."
+            )
+            strategy_ran = False
 
         run_summary = None
         if strategy_ran:
-            print(f"[{step_number}/{len(benchmark_index)}] Running strategy for {run_date.isoformat()}")
+            print(
+                f"[{step_number}/{len(benchmark_index)}] Running strategy for {run_date.isoformat()} "
+                f"using signals through {signal_date.isoformat()}"
+            )
             try:
                 run_summary = RunAll(
                     trading_client=trading_client,
                     data_client=data_client,
                     run_date=run_date,
+                    signal_date=signal_date,
                     save_outputs=False,
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     max_position_fraction=max_position_fraction,
@@ -733,6 +771,7 @@ def run_backtest(
                     else 0.0
                 ),
                 "strategy_ran": strategy_ran,
+                "signal_date": signal_date.isoformat() if signal_date else None,
                 "market_health": run_summary["market_health"] if run_summary else None,
                 "fees_paid_cumulative": trading_client.total_fees_paid,
                 "trade_count": len(trading_client.order_log),

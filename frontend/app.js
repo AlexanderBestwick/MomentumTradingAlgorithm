@@ -338,6 +338,161 @@ function getLiveSettings(run) {
     };
 }
 
+function getPreviousLiveRunSummary(runId) {
+    const runs = safeArray(state.live.history?.runs);
+    const runIndex = runs.findIndex((run) => run.id === runId);
+    return runIndex >= 0 ? runs[runIndex + 1] ?? null : null;
+}
+
+function makeLiveActivityKey(symbol, side) {
+    return `${symbol ?? ""}|${String(side ?? "").toLowerCase()}`;
+}
+
+function getPreviousRankForDetail(run, detail) {
+    if (!run?.id || !detail?.symbol) {
+        return null;
+    }
+
+    const previousRunSummary = getPreviousLiveRunSummary(run.id);
+    if (!previousRunSummary?.id) {
+        return null;
+    }
+
+    const previousRun = state.live.runDetails[previousRunSummary.id];
+    if (!previousRun) {
+        return null;
+    }
+
+    const previousDetail = safeArray(previousRun.action_details)
+        .find((candidate) => candidate.symbol === detail.symbol);
+    return asNumber(previousDetail?.raw_rank);
+}
+
+function formatLiveRankLine(run, detail) {
+    if (!detail) {
+        return "Rank: —";
+    }
+
+    const currentRank = asNumber(detail.raw_rank);
+    const previousRank = getPreviousRankForDetail(run, detail);
+    if (currentRank === null && previousRank === null) {
+        return "Rank: —";
+    }
+
+    if (currentRank !== null && previousRank !== null) {
+        return `Rank: ${formatCompactNumber(previousRank)} -> ${formatCompactNumber(currentRank)}`;
+    }
+
+    return `Rank: ${formatCompactNumber(currentRank)}`;
+}
+
+function getLiveActivityHeadline(run, detail, order) {
+    if (!detail) {
+        const side = String(order?.side ?? "").toLowerCase();
+        if (side === "buy") {
+            return "Executed buy";
+        }
+        if (side === "sell") {
+            return "Executed sell";
+        }
+        return "Order activity";
+    }
+
+    const rawRank = asNumber(detail.raw_rank);
+    const rawLimit = asNumber(getLiveSettings(run).raw_rank_consideration_limit);
+
+    switch (detail.category) {
+        case "underrisked":
+            return "Underrisked";
+        case "overrisked":
+            return "Overrisked";
+        case "capped_sells":
+            return "Cap trim";
+        case "opened":
+            return "Opened";
+        case "defensive_buys":
+            return "Defensive buy";
+        case "closed":
+            if (rawRank === null) {
+                return "Left universe";
+            }
+            if (rawLimit !== null && rawRank > rawLimit) {
+                return "Rank dropped";
+            }
+            if (detail.passes_filters === false || detail.buy_eligible === false) {
+                return "Filter failed";
+            }
+            return "Removed";
+        default:
+            return "Strategy action";
+    }
+}
+
+function getOrderNotionalValue(order) {
+    const explicitNotional = asNumber(order?.notional);
+    if (explicitNotional !== null) {
+        return explicitNotional;
+    }
+
+    const qty = asNumber(order?.filled_qty ?? order?.qty);
+    const price = asNumber(order?.filled_avg_price);
+    if (qty === null || price === null) {
+        return null;
+    }
+
+    return qty * price;
+}
+
+function formatLiveActivitySignalLine(run, detail) {
+    if (!detail) {
+        return "Rank: — · Momentum — · Annualised — · Target shares —";
+    }
+
+    return [
+        formatLiveRankLine(run, detail),
+        `Momentum ${formatPercentValue(detail.momentum, 2, false)}`,
+        `Annualised ${formatPercentValue(detail.annualised_return, 2, false)}`,
+        `Target shares ${formatCompactNumber(detail.target_shares, 2)}`
+    ].join(" · ");
+}
+
+function formatLiveActivityExecutionLine(run, order) {
+    if (!order) {
+        return `No filled order record published · ${formatDateTime(run?.generated_at)}`;
+    }
+
+    return [
+        `Filled ${formatCompactNumber(order.filled_qty ?? order.qty, 2)} at ${formatCurrency(order.filled_avg_price, 2)}`,
+        `Notional ${formatCurrency(getOrderNotionalValue(order), 2)}`,
+        formatDateTime(order.filled_at ?? order.submitted_at)
+    ].join(" · ");
+}
+
+function buildLiveActivityEntries(run) {
+    const detailQueues = new Map();
+    safeArray(run?.action_details).forEach((detail) => {
+        const key = makeLiveActivityKey(detail.symbol, detail.side);
+        const queue = detailQueues.get(key) ?? [];
+        queue.push(detail);
+        detailQueues.set(key, queue);
+    });
+
+    const entries = safeArray(run?.recent_orders).map((order) => {
+        const key = makeLiveActivityKey(order.symbol, order.side);
+        const queue = detailQueues.get(key);
+        const detail = queue && queue.length > 0 ? queue.shift() : null;
+        return { detail, order };
+    });
+
+    detailQueues.forEach((queue) => {
+        queue.forEach((detail) => {
+            entries.push({ detail, order: null });
+        });
+    });
+
+    return entries;
+}
+
 function getAvailableLiveTimeframes(run) {
     const portfolioHistory = run?.portfolio_history ?? {};
     const available = LIVE_TIMEFRAME_ORDER.filter((label) => portfolioHistory[label]);
@@ -1360,73 +1515,43 @@ function renderLivePositions(run) {
     });
 }
 
-function renderLiveOrders(run) {
-    const container = document.getElementById("live-orders-list");
-    const orders = safeArray(run?.recent_orders);
-    setText("live-orders-tag", orders.length > 0 ? `${orders.length} recent orders` : "No recent orders");
+function renderLiveActivity(run) {
+    const container = document.getElementById("live-activity-list");
+    const entries = buildLiveActivityEntries(run);
+    setText("live-activity-tag", entries.length > 0 ? `${entries.length} logged actions` : "No actions");
 
     if (!run) {
-        container.innerHTML = emptyStateHtml("Select a live run to inspect the orders it submitted.");
+        container.innerHTML = emptyStateHtml("Select a live run to inspect the bot's decisions and fills.");
         return;
     }
 
-    if (orders.length === 0) {
-        container.innerHTML = emptyStateHtml("This live run did not publish any recent order records.");
-        return;
-    }
-
-    container.innerHTML = orders
-        .map((order) => `
-            <article class="feed-item">
-                <div class="feed-row">
-                    <h4>${order.symbol ?? "Unknown"} · ${(order.side ?? "order").toUpperCase()}</h4>
-                    <span class="feed-badge">${order.status ?? "unknown"}</span>
-                </div>
-                <p>${order.reason ?? "No reason was attached to this order record yet."}</p>
-                <div class="feed-meta">
-                    Filled ${formatCompactNumber(order.filled_qty ?? order.qty, 2)} at ${formatCurrency(order.filled_avg_price, 2)}
-                    · Notional ${formatCurrency(order.notional, 2)}
-                    · ${formatDateTime(order.filled_at ?? order.submitted_at)}
-                </div>
-            </article>
-        `)
-        .join("");
-}
-
-function renderLiveDecisions(run) {
-    const container = document.getElementById("live-decisions-list");
-    const details = safeArray(run?.action_details);
-    setText("live-decisions-tag", details.length > 0 ? `${details.length} decisions` : "No decisions");
-
-    if (!run) {
-        container.innerHTML = emptyStateHtml("Select a live run to inspect the reasoning behind the bot's actions.");
-        return;
-    }
-
-    if (details.length === 0) {
+    if (entries.length === 0) {
         const message = run.error_detail
-            ? `This run failed before a decision log could be published. Error: ${run.error_detail}`
-            : "This live run did not publish any action-detail reasoning.";
+            ? `This run failed before a decision or trade log could be published. Error: ${run.error_detail}`
+            : "This live run did not publish any decision or trade records.";
         container.innerHTML = emptyStateHtml(message);
         return;
     }
 
-    container.innerHTML = details
-        .map((detail) => `
-            <article class="feed-item">
-                <div class="feed-row">
-                    <h4>${detail.symbol} · ${detail.side?.toUpperCase() ?? "ACTION"}</h4>
-                    <span class="feed-badge">${detail.category ?? "decision"}</span>
-                </div>
-                <p>${detail.reason ?? "No reason attached."}</p>
-                <div class="feed-meta">
-                    Rank ${detail.raw_rank ?? "—"}
-                    · Momentum ${formatPercentValue(detail.momentum, 2, false)}
-                    · Annualised ${formatPercentValue(detail.annualised_return, 2, false)}
-                    · Target shares ${formatCompactNumber(detail.target_shares, 2)}
-                </div>
-            </article>
-        `)
+    container.innerHTML = entries
+        .map(({ detail, order }) => {
+            const symbol = detail?.symbol ?? order?.symbol ?? "Unknown";
+            const side = (order?.side ?? detail?.side ?? "action").toUpperCase();
+            const badge = order?.status ?? detail?.category ?? "decision";
+            const headline = getLiveActivityHeadline(run, detail, order);
+
+            return `
+                <article class="feed-item is-dense">
+                    <div class="feed-row">
+                        <h4>${symbol} · ${side}</h4>
+                        <span class="feed-badge">${badge}</span>
+                    </div>
+                    <p class="feed-summary">${headline}</p>
+                    <div class="feed-meta is-tight">${formatLiveActivitySignalLine(run, detail)}</div>
+                    <div class="feed-meta is-tight">${formatLiveActivityExecutionLine(run, order)}</div>
+                </article>
+            `;
+        })
         .join("");
 }
 
@@ -1494,8 +1619,7 @@ function renderLiveView() {
     renderLiveChart(run);
     renderLiveHistory();
     renderLivePositions(run);
-    renderLiveOrders(run);
-    renderLiveDecisions(run);
+    renderLiveActivity(run);
 }
 
 function renderBacktestView() {
@@ -1570,6 +1694,14 @@ async function selectLiveRun(runId) {
     state.live.selectedRunId = runId;
     try {
         await ensureLiveDetail(runId);
+        const previousRun = getPreviousLiveRunSummary(runId);
+        if (previousRun?.id) {
+            try {
+                await ensureLiveDetail(previousRun.id);
+            } catch (error) {
+                console.warn(`Failed to preload previous live run ${previousRun.id}: ${error.message}`);
+            }
+        }
         state.live.error = null;
     } catch (error) {
         state.live.error = `Failed to load live run ${runId}: ${error.message}`;
@@ -1610,6 +1742,14 @@ async function loadLiveHistory() {
         if (state.live.selectedRunId) {
             try {
                 await ensureLiveDetail(state.live.selectedRunId);
+                const previousRun = getPreviousLiveRunSummary(state.live.selectedRunId);
+                if (previousRun?.id) {
+                    try {
+                        await ensureLiveDetail(previousRun.id);
+                    } catch (error) {
+                        console.warn(`Failed to preload previous live run ${previousRun.id}: ${error.message}`);
+                    }
+                }
             } catch (error) {
                 state.live.error = `Loaded live history but failed to load the latest run detail: ${error.message}`;
             }

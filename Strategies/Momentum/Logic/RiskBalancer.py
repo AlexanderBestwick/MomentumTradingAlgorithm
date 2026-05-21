@@ -2,6 +2,7 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.requests import OrderRequest
 from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 import time
+from Strategies.Momentum.Logic.OrderSync import wait_for_market_order_completion
 from Strategies.Momentum.Logic.PositionSizing import (
     capped_target_shares,
     max_position_shares,
@@ -108,15 +109,14 @@ def buy_underrisked(
     
     print(f"Underrisked: {underrisked}")
 
-    remaining_balance = float(trading_client.get_account().cash)
     bought = []
 
     for sym, current_qty in underrisked.items():
         try:
             new_qty = ideal_for_held[sym]
-
-            price = data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=sym))[sym].price
+            remaining_balance = float(trading_client.get_account().cash)
             portfolio_value = float(trading_client.get_account().portfolio_value)
+            price = data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=sym))[sym].price
             capped_target_qty = capped_target_shares(
                 new_qty,
                 portfolio_value,
@@ -145,9 +145,9 @@ def buy_underrisked(
                     type=OrderType.MARKET,
                     time_in_force=TimeInForce.DAY,
                 )
-                trading_client.submit_order(order)
+                submitted_order = trading_client.submit_order(order)
+                wait_for_market_order_completion(trading_client, submitted_order)
                 print(f"{sym} bought {deficit:.2f} to balance (underrisked)")
-                remaining_balance = max(0.0, remaining_balance - cost_estimate)
                 bought.append(sym)
             else:
                 if sleep_seconds > 0:
@@ -167,7 +167,8 @@ def buy_underrisked(
                     type=OrderType.MARKET,
                     time_in_force=TimeInForce.DAY,
                 )
-                trading_client.submit_order(order)
+                submitted_order = trading_client.submit_order(order)
+                wait_for_market_order_completion(trading_client, submitted_order)
                 print(f"{sym} bought {notional:.2f} USD to balance (underrisked, partial)")
                 bought.append(sym)
                 break

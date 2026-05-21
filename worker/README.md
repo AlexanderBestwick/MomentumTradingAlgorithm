@@ -45,7 +45,7 @@ Optional worker settings:
 - `RAW_RANK_CONSIDERATION_LIMIT=80`
 - `MAX_POSITION_FRACTION=0.10`
 - `CASH_BUFFER=10`
-- `CASH_BUFFER_PERCENT=0.001`
+- `CASH_BUFFER_PERCENT=0.01`
 - `CASH_BUFFER_MIN=10`
 - `SAVE_OUTPUTS=true`
 - `ENFORCE_LIVE_SAFEGUARDS=true`
@@ -62,7 +62,7 @@ Optional worker settings:
 - `AWS_REGION=eu-west-2`
 - `LIVE_RUN_SOURCE=ecs_worker`
 
-`CASH_BUFFER` remains the fixed-dollar fallback. If you set `CASH_BUFFER_PERCENT`, the worker will instead use `max(CASH_BUFFER_MIN, equity * CASH_BUFFER_PERCENT)`. For example, `CASH_BUFFER_PERCENT=0.001` keeps back about `0.1%` of account equity, with `CASH_BUFFER_MIN` acting as the minimum floor.
+The live worker keeps back `max(CASH_BUFFER_MIN, equity * CASH_BUFFER_PERCENT)`. By default that is `max(10, 1% of equity)`. For example, `CASH_BUFFER_PERCENT=0.01` keeps back about `1%` of account equity, with `CASH_BUFFER_MIN` acting as the minimum floor.
 
 `WITHDRAWAL_CASH_RAISE_BUFFER_PERCENT` applies only to withdrawal funding. For example, `0.001` tells the worker to try to sell about `0.1%` more than the current withdrawal cash shortfall so small fill differences are less likely to leave the account underfunded.
 

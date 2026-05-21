@@ -60,16 +60,11 @@ def _get_float_env(name, default):
 
 def _resolve_cash_buffer(account_snapshot):
     fixed_cash_buffer = _get_float_env("CASH_BUFFER", 10.0)
-    raw_percent = os.getenv("CASH_BUFFER_PERCENT")
-
-    if raw_percent is None:
-        return fixed_cash_buffer, "fixed"
-
-    cash_buffer_percent = float(raw_percent)
+    cash_buffer_percent = _get_float_env("CASH_BUFFER_PERCENT", 0.01)
     cash_buffer_min = _get_float_env("CASH_BUFFER_MIN", fixed_cash_buffer)
     account_equity = float(account_snapshot["equity"])
     computed_cash_buffer = max(cash_buffer_min, account_equity * cash_buffer_percent)
-    return computed_cash_buffer, f"percent({cash_buffer_percent:.4%})"
+    return computed_cash_buffer, f"max({cash_buffer_min:.2f}, {cash_buffer_percent:.2%} of equity)"
 
 
 def _is_running_in_aws():

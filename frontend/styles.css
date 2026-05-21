@@ -453,6 +453,10 @@ tbody tr.is-selected {
     gap: 12px;
 }
 
+.dense-feed {
+    gap: 10px;
+}
+
 .feed-item,
 .metric-item {
     padding: 16px;
@@ -486,6 +490,27 @@ tbody tr.is-selected {
     justify-content: space-between;
     gap: 14px;
     align-items: baseline;
+}
+
+.feed-item.is-dense {
+    padding: 14px 16px;
+}
+
+.feed-item.is-dense h4 {
+    font-size: 0.98rem;
+}
+
+.feed-summary {
+    margin-top: 6px;
+    color: var(--ink);
+    font-size: 0.94rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.feed-meta.is-tight {
+    margin-top: 6px;
+    line-height: 1.45;
 }
 
 .feed-badge {

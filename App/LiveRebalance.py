@@ -151,6 +151,7 @@ def RunAll(
     data_client=None,
     *,
     run_date=None,
+    signal_date=None,
     save_outputs=True,
     defensive_mode="cash",
     defensive_symbol="SGOV",
@@ -192,6 +193,9 @@ def RunAll(
     elif run_date is None:
         run_date = date.today()
 
+    if signal_date is None:
+        signal_date = run_date
+
     approved_save_path = "Data/ApprovedStockFrame.csv" if save_outputs else None
     momentum_save_path = "Data/MomentumResults.csv" if save_outputs else None
     sleep_seconds = 0 if is_backtest else 5
@@ -200,19 +204,19 @@ def RunAll(
         print()
         # 1) Market health - required before new buys.
         market_health = _run_step(
-            f"Market health check for {run_date.isoformat()}",
+            f"Market health check for signal date {signal_date.isoformat()}",
             MarketIndicator,
             data_client,
-            as_of_date=run_date,
+            as_of_date=signal_date,
         )
         print()
 
         # 2) Build full universe once, then keep the existing filters unchanged.
         selection_universe = _run_step(
-            f"Universe selection for {run_date.isoformat()}",
+            f"Universe selection for signal date {signal_date.isoformat()}",
             BuildSelectionUniverse,
             data_client,
-            as_of_date=run_date,
+            as_of_date=signal_date,
             save_path=approved_save_path,
         )
         approved_df = selection_universe["approved_stock_df"]
@@ -337,6 +341,7 @@ def RunAll(
 
         result = {
             "run_date": run_date,
+            "signal_date": signal_date,
             "market_health": market_health,
             "approved_count": len(approved_df.index.get_level_values("symbol").unique()) if not approved_df.empty else 0,
             "full_ranked_universe": full_ranked_universe,

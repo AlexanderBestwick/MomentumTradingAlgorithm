@@ -2,6 +2,7 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.requests import OrderRequest
 from alpaca.trading.enums import OrderSide, OrderType, TimeInForce
 import time
+from Strategies.Momentum.Logic.OrderSync import wait_for_market_order_completion
 from Strategies.Momentum.Logic.PositionSizing import capped_target_shares
 
 
@@ -43,7 +44,6 @@ def open_positions(
     held_symbols = set(current_shares)
     to_buy = target_symbols - held_symbols
 
-    remaining_balance = float(trading_client.get_account().cash)
     buys = []
 
     for row in momentum_df.head(top_n).itertuples(index=False):
@@ -52,8 +52,9 @@ def open_positions(
             continue
 
         try:
-            price = data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=sym))[sym].price
+            remaining_balance = float(trading_client.get_account().cash)
             portfolio_value = float(trading_client.get_account().portfolio_value)
+            price = data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=sym))[sym].price
             shares = capped_target_shares(
                 row.shares,
                 portfolio_value,
@@ -73,9 +74,9 @@ def open_positions(
                     type=OrderType.MARKET,
                     time_in_force=TimeInForce.DAY,
                 )
-                trading_client.submit_order(order)
+                submitted_order = trading_client.submit_order(order)
+                wait_for_market_order_completion(trading_client, submitted_order)
                 print(f"Bought {shares:.2f} {sym}, cost estimate {cost_estimate:.2f}")
-                remaining_balance = max(0.0, remaining_balance - cost_estimate)
                 buys.append(sym)
             else:
                 if sleep_seconds > 0:
@@ -95,7 +96,8 @@ def open_positions(
                     type=OrderType.MARKET,
                     time_in_force=TimeInForce.DAY,
                 )
-                trading_client.submit_order(order)
+                submitted_order = trading_client.submit_order(order)
+                wait_for_market_order_completion(trading_client, submitted_order)
                 print(f"Bought {notional:.2f} USD worth of {sym}")
                 buys.append(sym)
                 break
@@ -135,7 +137,8 @@ def allocate_defensive_position(
             type=OrderType.MARKET,
             time_in_force=TimeInForce.DAY,
         )
-        trading_client.submit_order(order)
+        submitted_order = trading_client.submit_order(order)
+        wait_for_market_order_completion(trading_client, submitted_order)
         print(f"Allocated {notional:.2f} USD to defensive Treasury holding {defensive_symbol}")
         return [defensive_symbol]
     except Exception as exc:
