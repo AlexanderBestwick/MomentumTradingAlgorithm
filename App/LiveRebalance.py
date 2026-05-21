@@ -48,6 +48,24 @@ def _build_rank_lookup(full_ranked_universe):
     return lookup
 
 
+def _build_filter_reason_lookup(selection_universe):
+    reason_lookup = {}
+
+    for symbol in selection_universe.get("volatile_stocks", []):
+        reason_lookup[symbol] = "Daily volatility"
+
+    for symbol in selection_universe.get("rejected_stocks", []):
+        reason_lookup[symbol] = "Below 100DMA"
+
+    for symbol in selection_universe.get("short_history_stocks", []):
+        reason_lookup[symbol] = "Short history"
+
+    for symbol in selection_universe.get("datafail_stocks", []):
+        reason_lookup[symbol] = "Data issue"
+
+    return reason_lookup
+
+
 def _build_action_details(
     *,
     category,
@@ -57,6 +75,7 @@ def _build_action_details(
     raw_rank_consideration_limit,
     approved_symbols,
     filtered_symbols,
+    filter_reason_lookup,
     max_position_fraction,
     defensive_symbol,
 ):
@@ -66,6 +85,7 @@ def _build_action_details(
         rank = context.get("raw_rank")
         passes_filters = symbol in approved_symbols
         buy_eligible = symbol in filtered_symbols
+        filter_failure = filter_reason_lookup.get(symbol)
         momentum = context.get("momentum")
         annualised_return = context.get("annualised_return")
         atr = context.get("atr")
@@ -75,23 +95,40 @@ def _build_action_details(
             if rank is None:
                 reason = "Left the ranked universe entirely for the current run."
             elif rank > raw_rank_consideration_limit and not passes_filters:
+                filter_text = (
+                    f"failed the {filter_failure.lower()} screen."
+                    if filter_failure
+                    else "failed the current buy filters."
+                )
                 reason = (
                     f"Fell to raw rank {rank}, outside the raw top {raw_rank_consideration_limit} ranked universe, "
-                    "and failed the current buy filters."
+                    f"and {filter_text}"
                 )
             elif rank > raw_rank_consideration_limit:
                 reason = (
                     f"Fell to raw rank {rank}, outside the raw top {raw_rank_consideration_limit} ranked universe."
                 )
             elif not passes_filters:
+                filter_text = (
+                    f"failed the {filter_failure.lower()} screen"
+                    if filter_failure
+                    else "failed the current buy filters"
+                )
                 reason = (
-                    f"Remained inside the raw top {raw_rank_consideration_limit} ranked universe but failed the current buy filters, "
+                    f"Remained inside the raw top {raw_rank_consideration_limit} ranked universe but {filter_text}, "
                     "so it was removed from the weekly hold list."
                 )
             else:
                 reason = "Left the weekly target list for the current run."
             if not passes_filters:
-                reason += " This usually points to weaker liquidity, price, or volatility characteristics."
+                if filter_failure == "Daily volatility":
+                    reason += " The stock breached the daily-volatility screen."
+                elif filter_failure == "Below 100DMA":
+                    reason += " The closing price fell below the 100-day moving average."
+                elif filter_failure == "Short history":
+                    reason += " The stock no longer met the minimum history requirement."
+                elif filter_failure == "Data issue":
+                    reason += " Required price history was missing or incomplete."
         elif category == "capped_sells":
             reason = f"Trimmed to keep the position within the {max_position_fraction:.0%} single-stock cap."
         elif category == "overrisked":
@@ -129,6 +166,7 @@ def _build_action_details(
                 "raw_rank": rank,
                 "passes_filters": passes_filters,
                 "buy_eligible": buy_eligible,
+                "filter_failure": filter_failure,
                 "momentum": momentum,
                 "annualised_return": annualised_return,
                 "atr": atr,
@@ -247,6 +285,7 @@ def RunAll(
         approved_symbol_set = set(approved_symbols)
         filtered_symbol_set = set(filtered_universe["symbol"]) if not filtered_universe.empty else set()
         rank_lookup = _build_rank_lookup(full_ranked_universe)
+        filter_reason_lookup = _build_filter_reason_lookup(selection_universe)
 
         protected_symbols = (
             {defensive_symbol}
@@ -371,6 +410,7 @@ def RunAll(
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
                     filtered_symbols=filtered_symbol_set,
+                    filter_reason_lookup=filter_reason_lookup,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -382,6 +422,7 @@ def RunAll(
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
                     filtered_symbols=filtered_symbol_set,
+                    filter_reason_lookup=filter_reason_lookup,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -393,6 +434,7 @@ def RunAll(
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
                     filtered_symbols=filtered_symbol_set,
+                    filter_reason_lookup=filter_reason_lookup,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -404,6 +446,7 @@ def RunAll(
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
                     filtered_symbols=filtered_symbol_set,
+                    filter_reason_lookup=filter_reason_lookup,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -415,6 +458,7 @@ def RunAll(
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
                     filtered_symbols=filtered_symbol_set,
+                    filter_reason_lookup=filter_reason_lookup,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )
@@ -426,6 +470,7 @@ def RunAll(
                     raw_rank_consideration_limit=raw_rank_consideration_limit,
                     approved_symbols=approved_symbol_set,
                     filtered_symbols=filtered_symbol_set,
+                    filter_reason_lookup=filter_reason_lookup,
                     max_position_fraction=max_position_fraction,
                     defensive_symbol=defensive_symbol,
                 )

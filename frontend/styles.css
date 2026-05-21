@@ -405,6 +405,21 @@ code {
     align-items: start;
 }
 
+.live-history-panel {
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.live-activity-panel {
+    grid-column: 1;
+    grid-row: 2;
+}
+
+.live-positions-panel {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+}
+
 .table-wrap {
     overflow-x: auto;
     border-radius: 18px;
@@ -581,6 +596,13 @@ tbody tr.is-selected {
 
     .panel-span-2 {
         grid-column: auto;
+    }
+
+    .live-history-panel,
+    .live-activity-panel,
+    .live-positions-panel {
+        grid-column: auto;
+        grid-row: auto;
     }
 }
 

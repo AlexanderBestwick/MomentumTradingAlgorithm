@@ -114,7 +114,7 @@
                 </article>
 
                 <section class="content-grid live-grid">
-                    <article class="panel">
+                    <article class="panel live-history-panel">
                         <div class="panel-header">
                             <div>
                                 <p class="panel-kicker">Live Run History</p>
@@ -138,7 +138,18 @@
                         </div>
                     </article>
 
-                    <article class="panel">
+                    <article class="panel live-activity-panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">Decision & Execution Log</p>
+                                <h3>Why The Bot Acted</h3>
+                            </div>
+                            <span class="tag" id="live-activity-tag">Selected run</span>
+                        </div>
+                        <div class="list-feed dense-feed" id="live-activity-list"></div>
+                    </article>
+
+                    <article class="panel live-positions-panel">
                         <div class="panel-header">
                             <div>
                                 <p class="panel-kicker">Current Holdings</p>
@@ -161,16 +172,6 @@
                         </div>
                     </article>
 
-                    <article class="panel">
-                        <div class="panel-header">
-                            <div>
-                                <p class="panel-kicker">Decision & Execution Log</p>
-                                <h3>Why The Bot Acted</h3>
-                            </div>
-                            <span class="tag" id="live-activity-tag">Selected run</span>
-                        </div>
-                        <div class="list-feed dense-feed" id="live-activity-list"></div>
-                    </article>
                 </section>
             </section>
 

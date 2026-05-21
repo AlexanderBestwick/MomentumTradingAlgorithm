@@ -400,6 +400,7 @@ function getLiveActivityHeadline(run, detail, order) {
 
     const rawRank = asNumber(detail.raw_rank);
     const rawLimit = asNumber(getLiveSettings(run).raw_rank_consideration_limit);
+    const filterFailure = detail.filter_failure;
 
     switch (detail.category) {
         case "underrisked":
@@ -413,6 +414,12 @@ function getLiveActivityHeadline(run, detail, order) {
         case "defensive_buys":
             return "Defensive buy";
         case "closed":
+            if (filterFailure && rawLimit !== null && rawRank !== null && rawRank > rawLimit) {
+                return `${filterFailure} + rank drop`;
+            }
+            if (filterFailure) {
+                return filterFailure;
+            }
             if (rawRank === null) {
                 return "Left universe";
             }
