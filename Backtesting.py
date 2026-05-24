@@ -143,6 +143,8 @@ def _compute_backtest_risk_metrics(results_df, *, risk_free_rate=DEFAULT_RISK_FR
         return {
             "beta": None,
             "sharpe_ratio": None,
+            "annualized_volatility_percent": None,
+            "information_ratio": None,
         }
 
     benchmark_variance = returns["benchmark"].var(ddof=1)
@@ -151,6 +153,10 @@ def _compute_backtest_risk_metrics(results_df, *, risk_free_rate=DEFAULT_RISK_FR
         beta = float(returns["portfolio"].cov(returns["benchmark"]) / benchmark_variance)
 
     portfolio_std = returns["portfolio"].std(ddof=1)
+    annualized_volatility_percent = None
+    if pd.notna(portfolio_std) and portfolio_std > 0:
+        annualized_volatility_percent = float(portfolio_std * math.sqrt(252) * 100.0)
+
     sharpe_ratio = None
     if pd.notna(portfolio_std) and portfolio_std > 0:
         annual_risk_free_rate = float(risk_free_rate or 0.0)
@@ -162,9 +168,17 @@ def _compute_backtest_risk_metrics(results_df, *, risk_free_rate=DEFAULT_RISK_FR
         excess_returns = returns["portfolio"] - daily_risk_free_rate
         sharpe_ratio = float((excess_returns.mean() / portfolio_std) * math.sqrt(252))
 
+    active_returns = returns["portfolio"] - returns["benchmark"]
+    tracking_error = active_returns.std(ddof=1)
+    information_ratio = None
+    if pd.notna(tracking_error) and tracking_error > 0:
+        information_ratio = float((active_returns.mean() / tracking_error) * math.sqrt(252))
+
     return {
         "beta": beta,
         "sharpe_ratio": sharpe_ratio,
+        "annualized_volatility_percent": annualized_volatility_percent,
+        "information_ratio": information_ratio,
     }
 
 
@@ -229,6 +243,8 @@ def _build_backtest_record(
             "alpha_dollars": alpha_dollars,
             "beta": risk_metrics["beta"],
             "sharpe_ratio": risk_metrics["sharpe_ratio"],
+            "annualized_volatility_percent": risk_metrics["annualized_volatility_percent"],
+            "information_ratio": risk_metrics["information_ratio"],
             "risk_free_rate_percent": float(risk_free_rate) * 100.0,
             "final_reserve_percentage": final_reserve_percentage,
             "reserve_label": reserve_label,

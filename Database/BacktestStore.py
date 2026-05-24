@@ -46,6 +46,8 @@ def ensure_schema(database_path=DEFAULT_BACKTEST_DATABASE_PATH, *, database_url=
                 alpha_dollars REAL NOT NULL,
                 beta REAL,
                 sharpe_ratio REAL,
+                annualized_volatility_percent REAL,
+                information_ratio REAL,
                 risk_free_rate_percent REAL,
                 final_reserve_percentage REAL NOT NULL,
                 reserve_label TEXT NOT NULL,
@@ -94,6 +96,8 @@ def ensure_schema(database_path=DEFAULT_BACKTEST_DATABASE_PATH, *, database_url=
         )
         _ensure_column(session, "backtest_runs", "beta", "REAL")
         _ensure_column(session, "backtest_runs", "sharpe_ratio", "REAL")
+        _ensure_column(session, "backtest_runs", "annualized_volatility_percent", "REAL")
+        _ensure_column(session, "backtest_runs", "information_ratio", "REAL")
         _ensure_column(session, "backtest_runs", "risk_free_rate_percent", "REAL")
 
 
@@ -133,6 +137,8 @@ def save_backtest_record(
                 alpha_dollars,
                 beta,
                 sharpe_ratio,
+                annualized_volatility_percent,
+                information_ratio,
                 risk_free_rate_percent,
                 final_reserve_percentage,
                 reserve_label,
@@ -151,7 +157,7 @@ def save_backtest_record(
                 elapsed_label,
                 results_path,
                 chart_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -169,6 +175,8 @@ def save_backtest_record(
                 summary["alpha_dollars"],
                 summary.get("beta"),
                 summary.get("sharpe_ratio"),
+                summary.get("annualized_volatility_percent"),
+                summary.get("information_ratio"),
                 summary.get("risk_free_rate_percent"),
                 summary["final_reserve_percentage"],
                 summary["reserve_label"],

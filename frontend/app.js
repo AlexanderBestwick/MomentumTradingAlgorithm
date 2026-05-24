@@ -804,7 +804,12 @@ function calculateBacktestRiskMetrics(series, annualRiskFreeRate = DEFAULT_BACKT
     }
 
     if (returns.length < 2) {
-        return { beta: null, sharpeRatio: null };
+        return {
+            beta: null,
+            sharpeRatio: null,
+            annualizedVolatilityPercent: null,
+            informationRatio: null
+        };
     }
 
     const riskFreeRate = asNumber(annualRiskFreeRate) ?? DEFAULT_BACKTEST_RISK_FREE_RATE;
@@ -815,6 +820,8 @@ function calculateBacktestRiskMetrics(series, annualRiskFreeRate = DEFAULT_BACKT
     const meanBenchmarkReturn = returns.reduce((total, entry) => total + entry.benchmarkReturn, 0) / returns.length;
     const excessReturns = returns.map((entry) => entry.portfolioReturn - dailyRiskFreeRate);
     const meanExcessReturn = excessReturns.reduce((total, value) => total + value, 0) / excessReturns.length;
+    const activeReturns = returns.map((entry) => entry.portfolioReturn - entry.benchmarkReturn);
+    const meanActiveReturn = activeReturns.reduce((total, value) => total + value, 0) / activeReturns.length;
     const covariance = returns.reduce(
         (total, entry) => total + ((entry.portfolioReturn - meanPortfolioReturn) * (entry.benchmarkReturn - meanBenchmarkReturn)),
         0
@@ -827,11 +834,18 @@ function calculateBacktestRiskMetrics(series, annualRiskFreeRate = DEFAULT_BACKT
         (total, entry) => total + ((entry.portfolioReturn - meanPortfolioReturn) ** 2),
         0
     ) / (returns.length - 1);
+    const trackingErrorVariance = activeReturns.reduce(
+        (total, value) => total + ((value - meanActiveReturn) ** 2),
+        0
+    ) / (activeReturns.length - 1);
 
     const portfolioStd = Math.sqrt(portfolioVariance);
+    const trackingError = Math.sqrt(trackingErrorVariance);
     return {
         beta: benchmarkVariance > 0 ? covariance / benchmarkVariance : null,
-        sharpeRatio: portfolioStd > 0 ? (meanExcessReturn / portfolioStd) * Math.sqrt(252) : null
+        sharpeRatio: portfolioStd > 0 ? (meanExcessReturn / portfolioStd) * Math.sqrt(252) : null,
+        annualizedVolatilityPercent: portfolioStd > 0 ? portfolioStd * Math.sqrt(252) * 100 : null,
+        informationRatio: trackingError > 0 ? (meanActiveReturn / trackingError) * Math.sqrt(252) : null
     };
 }
 
@@ -850,7 +864,9 @@ function getBacktestRiskMetrics(run) {
     const storedSharpeRatio = asNumber(run.summary?.sharpe_ratio);
     return {
         beta: asNumber(run.summary?.beta) ?? fallback.beta,
-        sharpeRatio: storedRiskFreeRate && storedSharpeRatio !== null ? storedSharpeRatio : fallback.sharpeRatio
+        sharpeRatio: storedRiskFreeRate && storedSharpeRatio !== null ? storedSharpeRatio : fallback.sharpeRatio,
+        annualizedVolatilityPercent: asNumber(run.summary?.annualized_volatility_percent) ?? fallback.annualizedVolatilityPercent,
+        informationRatio: asNumber(run.summary?.information_ratio) ?? fallback.informationRatio
     };
 }
 
@@ -1262,17 +1278,23 @@ function renderTabState() {
 function renderBacktestSummary(run) {
     if (!run) {
         setText("backtest-portfolio-value", "$0");
+        setText("backtest-annual-return", "—");
+        setText("backtest-annual-return-note", "Calculated across the selected backtest period.");
         setText("backtest-alpha-value", "—");
         setText("backtest-alpha-note", state.backtest.error ?? "Run a backtest to populate this view.");
+        setText("backtest-information-ratio-value", "—");
+        setText("backtest-information-ratio-note", "Benchmark-relative return consistency.");
         setText("backtest-beta-value", "—");
         setText("backtest-beta-note", "Daily sensitivity to the index.");
         setText("backtest-sharpe-value", "—");
         setText("backtest-sharpe-note", `Annualised daily Sharpe, ${formatRatioAsPercent(DEFAULT_BACKTEST_RISK_FREE_RATE, 1)} risk-free rate.`);
+        setText("backtest-volatility-value", "—");
+        setText("backtest-volatility-note", "Annualised standard deviation of daily returns.");
         setText("backtest-drawdown-value", "—");
         setText("backtest-trades-value", "0");
         setText("backtest-fees-note", "No backtest data yet");
-        setText("backtest-annual-return", "—");
-        setText("backtest-annual-return-note", "Calculated across the selected backtest period.");
+        setText("backtest-reserved-metric-value", "—");
+        setText("backtest-reserved-metric-note", "Available for the next metric.");
         return;
     }
 
@@ -1281,25 +1303,35 @@ function renderBacktestSummary(run) {
     const riskMetrics = getBacktestRiskMetrics(run);
     const riskFreeRate = getBacktestRiskFreeRate(run);
     setText("backtest-portfolio-value", formatCurrency(summary.final_portfolio_value));
+    setText("backtest-annual-return", formatPercentValue(annualized.value, 2));
+    setText("backtest-annual-return-note", annualized.note);
     setText("backtest-alpha-value", formatPercentValue(summary.alpha_percent));
     setText("backtest-alpha-note", `${formatSignedCurrency(summary.alpha_dollars)} versus ${summary.benchmark_symbol ?? "benchmark"}`);
+    setText("backtest-information-ratio-value", formatCompactNumber(riskMetrics.informationRatio, 2));
+    setText("backtest-information-ratio-note", `Active return consistency versus ${summary.benchmark_symbol ?? "benchmark"}.`);
     setText("backtest-beta-value", formatCompactNumber(riskMetrics.beta, 2));
     setText("backtest-beta-note", `Daily return sensitivity versus ${summary.benchmark_symbol ?? "benchmark"}.`);
     setText("backtest-sharpe-value", formatCompactNumber(riskMetrics.sharpeRatio, 2));
     setText("backtest-sharpe-note", `Annualised from daily excess returns, ${formatRatioAsPercent(riskFreeRate, 1)} risk-free rate.`);
+    setText("backtest-volatility-value", formatPercentValue(riskMetrics.annualizedVolatilityPercent, 1, false));
+    setText("backtest-volatility-note", "Annualised standard deviation of daily returns.");
     setText("backtest-drawdown-value", formatPercentValue(summary.max_drawdown_percent, 1, false));
     setText("backtest-trades-value", formatCompactNumber(summary.trade_count));
     setText("backtest-fees-note", `${formatCurrency(summary.fees_paid_cumulative, 2)} in fees`);
-    setText("backtest-annual-return", formatPercentValue(annualized.value, 2));
-    setText("backtest-annual-return-note", annualized.note);
+    setText("backtest-reserved-metric-value", "—");
+    setText("backtest-reserved-metric-note", "Available for the next metric.");
 
     const alphaElement = document.getElementById("backtest-alpha-value");
+    const informationRatioElement = document.getElementById("backtest-information-ratio-value");
     const betaElement = document.getElementById("backtest-beta-value");
     const sharpeElement = document.getElementById("backtest-sharpe-value");
+    const volatilityElement = document.getElementById("backtest-volatility-value");
     const drawdownElement = document.getElementById("backtest-drawdown-value");
     alphaElement.className = toneClass(summary.alpha_percent);
+    informationRatioElement.className = toneClass(riskMetrics.informationRatio);
     betaElement.className = "neutral";
     sharpeElement.className = toneClass(riskMetrics.sharpeRatio);
+    volatilityElement.className = "neutral";
     drawdownElement.className = toneClass(summary.max_drawdown_percent);
 }
 
@@ -1351,8 +1383,10 @@ function renderBacktestResults(run) {
             ["Strategy Return", formatPercentValue(summary.portfolio_return_percent), toneClass(summary.portfolio_return_percent)],
             [`${summary.benchmark_symbol} Return`, formatPercentValue(summary.benchmark_return_percent), toneClass(summary.benchmark_return_percent)],
             ["Alpha", `${formatSignedCurrency(summary.alpha_dollars)} / ${formatPercentValue(summary.alpha_percent)}`, toneClass(summary.alpha_percent)],
+            ["Information Ratio", formatCompactNumber(riskMetrics.informationRatio, 2), toneClass(riskMetrics.informationRatio), `Active return consistency versus ${summary.benchmark_symbol ?? "benchmark"}.`],
             ["Beta", formatCompactNumber(riskMetrics.beta, 2), "neutral", `Daily sensitivity versus ${summary.benchmark_symbol ?? "benchmark"}.`],
             ["Sharpe Ratio", formatCompactNumber(riskMetrics.sharpeRatio, 2), toneClass(riskMetrics.sharpeRatio), `Annualised daily excess returns, ${formatRatioAsPercent(riskFreeRate, 1)} risk-free rate.`],
+            ["Annualised Volatility", formatPercentValue(riskMetrics.annualizedVolatilityPercent, 1, false), "neutral", "Annualised standard deviation of daily returns."],
             ["Max Drawdown", formatPercentValue(summary.max_drawdown_percent, 1, false), toneClass(summary.max_drawdown_percent)],
             ["Fees Paid", formatCurrency(summary.fees_paid_cumulative, 2)],
             ["Total Trades", formatCompactNumber(summary.trade_count)],
