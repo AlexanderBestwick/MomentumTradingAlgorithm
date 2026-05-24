@@ -6,6 +6,26 @@ from Database.Connection import DEFAULT_DATABASE_PATH, connect_database
 DEFAULT_BACKTEST_DATABASE_PATH = DEFAULT_DATABASE_PATH
 
 
+def _ensure_column(session, table_name, column_name, column_definition):
+    if session.dialect == "sqlite":
+        columns = session.fetchall_dicts(f"PRAGMA table_info({table_name})")
+        if any(column["name"] == column_name for column in columns):
+            return
+    else:
+        existing = session.fetchone_dict(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            """,
+            (table_name, column_name),
+        )
+        if existing is not None:
+            return
+
+    session.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
 def ensure_schema(database_path=DEFAULT_BACKTEST_DATABASE_PATH, *, database_url=None):
     with connect_database(database_path=database_path, database_url=database_url) as session:
         session.executescript(
@@ -24,6 +44,9 @@ def ensure_schema(database_path=DEFAULT_BACKTEST_DATABASE_PATH, *, database_url=
                 benchmark_return_percent REAL NOT NULL,
                 alpha_percent REAL NOT NULL,
                 alpha_dollars REAL NOT NULL,
+                beta REAL,
+                sharpe_ratio REAL,
+                risk_free_rate_percent REAL,
                 final_reserve_percentage REAL NOT NULL,
                 reserve_label TEXT NOT NULL,
                 positions_final INTEGER NOT NULL,
@@ -69,6 +92,9 @@ def ensure_schema(database_path=DEFAULT_BACKTEST_DATABASE_PATH, *, database_url=
             ON backtest_timeseries(run_id, date);
             """
         )
+        _ensure_column(session, "backtest_runs", "beta", "REAL")
+        _ensure_column(session, "backtest_runs", "sharpe_ratio", "REAL")
+        _ensure_column(session, "backtest_runs", "risk_free_rate_percent", "REAL")
 
 
 def save_backtest_record(
@@ -105,6 +131,9 @@ def save_backtest_record(
                 benchmark_return_percent,
                 alpha_percent,
                 alpha_dollars,
+                beta,
+                sharpe_ratio,
+                risk_free_rate_percent,
                 final_reserve_percentage,
                 reserve_label,
                 positions_final,
@@ -122,7 +151,7 @@ def save_backtest_record(
                 elapsed_label,
                 results_path,
                 chart_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -138,6 +167,9 @@ def save_backtest_record(
                 summary["benchmark_return_percent"],
                 summary["alpha_percent"],
                 summary["alpha_dollars"],
+                summary.get("beta"),
+                summary.get("sharpe_ratio"),
+                summary.get("risk_free_rate_percent"),
                 summary["final_reserve_percentage"],
                 summary["reserve_label"],
                 summary["positions_final"],

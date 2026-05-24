@@ -9,6 +9,7 @@ const BACKTEST_CHART_MODES = [
     { id: "spread", label: "Spread vs Index" },
     { id: "weeklyChange", label: "Weekly Change" }
 ];
+const DEFAULT_BACKTEST_RISK_FREE_RATE = 0.04;
 const LIVE_TIMEFRAME_ORDER = ["1M", "3M", "1A"];
 
 const state = {
@@ -47,11 +48,15 @@ function shouldPreferLocalData() {
     }
 
     const { protocol, hostname } = window.location;
+    const isPrivateNetworkHost = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(hostname);
     return (
         protocol === "file:"
         || hostname === "localhost"
         || hostname === "127.0.0.1"
+        || hostname === "0.0.0.0"
         || hostname === "[::1]"
+        || hostname.endsWith(".local")
+        || isPrivateNetworkHost
     );
 }
 
@@ -315,7 +320,8 @@ function getBacktestSettings(run) {
         defensive_mode: summary.defensive_mode,
         defensive_symbol: summary.defensive_symbol,
         trade_fee_flat: summary.trade_fee_flat,
-        trade_fee_rate: summary.trade_fee_rate
+        trade_fee_rate: summary.trade_fee_rate,
+        risk_free_rate: asNumber(summary.risk_free_rate_percent) !== null ? asNumber(summary.risk_free_rate_percent) / 100 : undefined
     };
 }
 
@@ -748,6 +754,106 @@ function getBacktestAnnualizedReturn(run) {
     };
 }
 
+function getBacktestRiskFreeRate(run) {
+    const settingsRate = asNumber(run?.settings?.risk_free_rate);
+    if (settingsRate !== null) {
+        return settingsRate;
+    }
+
+    const summaryRate = asNumber(run?.summary?.risk_free_rate);
+    if (summaryRate !== null) {
+        return summaryRate;
+    }
+
+    const summaryPercent = asNumber(run?.summary?.risk_free_rate_percent);
+    if (summaryPercent !== null) {
+        return summaryPercent / 100;
+    }
+
+    return DEFAULT_BACKTEST_RISK_FREE_RATE;
+}
+
+function calculateBacktestRiskMetrics(series, annualRiskFreeRate = DEFAULT_BACKTEST_RISK_FREE_RATE) {
+    const portfolioValues = safeArray(series?.portfolio_value);
+    const benchmarkValues = safeArray(series?.benchmark_value);
+    const returns = [];
+    const pointCount = Math.min(portfolioValues.length, benchmarkValues.length);
+
+    for (let index = 1; index < pointCount; index += 1) {
+        const previousPortfolio = asNumber(portfolioValues[index - 1]);
+        const currentPortfolio = asNumber(portfolioValues[index]);
+        const previousBenchmark = asNumber(benchmarkValues[index - 1]);
+        const currentBenchmark = asNumber(benchmarkValues[index]);
+
+        if (
+            previousPortfolio === null
+            || currentPortfolio === null
+            || previousBenchmark === null
+            || currentBenchmark === null
+            || previousPortfolio <= 0
+            || previousBenchmark <= 0
+        ) {
+            continue;
+        }
+
+        const portfolioReturn = (currentPortfolio / previousPortfolio) - 1;
+        const benchmarkReturn = (currentBenchmark / previousBenchmark) - 1;
+        if (Number.isFinite(portfolioReturn) && Number.isFinite(benchmarkReturn)) {
+            returns.push({ portfolioReturn, benchmarkReturn });
+        }
+    }
+
+    if (returns.length < 2) {
+        return { beta: null, sharpeRatio: null };
+    }
+
+    const riskFreeRate = asNumber(annualRiskFreeRate) ?? DEFAULT_BACKTEST_RISK_FREE_RATE;
+    const dailyRiskFreeRate = riskFreeRate > -1
+        ? (Math.pow(1 + riskFreeRate, 1 / 252) - 1)
+        : (riskFreeRate / 252);
+    const meanPortfolioReturn = returns.reduce((total, entry) => total + entry.portfolioReturn, 0) / returns.length;
+    const meanBenchmarkReturn = returns.reduce((total, entry) => total + entry.benchmarkReturn, 0) / returns.length;
+    const excessReturns = returns.map((entry) => entry.portfolioReturn - dailyRiskFreeRate);
+    const meanExcessReturn = excessReturns.reduce((total, value) => total + value, 0) / excessReturns.length;
+    const covariance = returns.reduce(
+        (total, entry) => total + ((entry.portfolioReturn - meanPortfolioReturn) * (entry.benchmarkReturn - meanBenchmarkReturn)),
+        0
+    ) / (returns.length - 1);
+    const benchmarkVariance = returns.reduce(
+        (total, entry) => total + ((entry.benchmarkReturn - meanBenchmarkReturn) ** 2),
+        0
+    ) / (returns.length - 1);
+    const portfolioVariance = returns.reduce(
+        (total, entry) => total + ((entry.portfolioReturn - meanPortfolioReturn) ** 2),
+        0
+    ) / (returns.length - 1);
+
+    const portfolioStd = Math.sqrt(portfolioVariance);
+    return {
+        beta: benchmarkVariance > 0 ? covariance / benchmarkVariance : null,
+        sharpeRatio: portfolioStd > 0 ? (meanExcessReturn / portfolioStd) * Math.sqrt(252) : null
+    };
+}
+
+function getBacktestRiskMetrics(run) {
+    if (!run) {
+        return { beta: null, sharpeRatio: null };
+    }
+
+    const riskFreeRate = getBacktestRiskFreeRate(run);
+    const fallback = calculateBacktestRiskMetrics(run.series, riskFreeRate);
+    const storedRiskFreeRate = (
+        asNumber(run.settings?.risk_free_rate) !== null
+        || asNumber(run.summary?.risk_free_rate) !== null
+        || asNumber(run.summary?.risk_free_rate_percent) !== null
+    );
+    const storedSharpeRatio = asNumber(run.summary?.sharpe_ratio);
+    return {
+        beta: asNumber(run.summary?.beta) ?? fallback.beta,
+        sharpeRatio: storedRiskFreeRate && storedSharpeRatio !== null ? storedSharpeRatio : fallback.sharpeRatio
+    };
+}
+
 function getLongestLiveTimeframe(run) {
     return [...LIVE_TIMEFRAME_ORDER]
         .reverse()
@@ -1158,6 +1264,10 @@ function renderBacktestSummary(run) {
         setText("backtest-portfolio-value", "$0");
         setText("backtest-alpha-value", "—");
         setText("backtest-alpha-note", state.backtest.error ?? "Run a backtest to populate this view.");
+        setText("backtest-beta-value", "—");
+        setText("backtest-beta-note", "Daily sensitivity to the index.");
+        setText("backtest-sharpe-value", "—");
+        setText("backtest-sharpe-note", `Annualised daily Sharpe, ${formatRatioAsPercent(DEFAULT_BACKTEST_RISK_FREE_RATE, 1)} risk-free rate.`);
         setText("backtest-drawdown-value", "—");
         setText("backtest-trades-value", "0");
         setText("backtest-fees-note", "No backtest data yet");
@@ -1168,9 +1278,15 @@ function renderBacktestSummary(run) {
 
     const summary = run.summary ?? {};
     const annualized = getBacktestAnnualizedReturn(run);
+    const riskMetrics = getBacktestRiskMetrics(run);
+    const riskFreeRate = getBacktestRiskFreeRate(run);
     setText("backtest-portfolio-value", formatCurrency(summary.final_portfolio_value));
     setText("backtest-alpha-value", formatPercentValue(summary.alpha_percent));
     setText("backtest-alpha-note", `${formatSignedCurrency(summary.alpha_dollars)} versus ${summary.benchmark_symbol ?? "benchmark"}`);
+    setText("backtest-beta-value", formatCompactNumber(riskMetrics.beta, 2));
+    setText("backtest-beta-note", `Daily return sensitivity versus ${summary.benchmark_symbol ?? "benchmark"}.`);
+    setText("backtest-sharpe-value", formatCompactNumber(riskMetrics.sharpeRatio, 2));
+    setText("backtest-sharpe-note", `Annualised from daily excess returns, ${formatRatioAsPercent(riskFreeRate, 1)} risk-free rate.`);
     setText("backtest-drawdown-value", formatPercentValue(summary.max_drawdown_percent, 1, false));
     setText("backtest-trades-value", formatCompactNumber(summary.trade_count));
     setText("backtest-fees-note", `${formatCurrency(summary.fees_paid_cumulative, 2)} in fees`);
@@ -1178,8 +1294,12 @@ function renderBacktestSummary(run) {
     setText("backtest-annual-return-note", annualized.note);
 
     const alphaElement = document.getElementById("backtest-alpha-value");
+    const betaElement = document.getElementById("backtest-beta-value");
+    const sharpeElement = document.getElementById("backtest-sharpe-value");
     const drawdownElement = document.getElementById("backtest-drawdown-value");
     alphaElement.className = toneClass(summary.alpha_percent);
+    betaElement.className = "neutral";
+    sharpeElement.className = toneClass(riskMetrics.sharpeRatio);
     drawdownElement.className = toneClass(summary.max_drawdown_percent);
 }
 
@@ -1223,12 +1343,16 @@ function renderBacktestResults(run) {
     }
 
     const summary = run.summary ?? {};
+    const riskMetrics = getBacktestRiskMetrics(run);
+    const riskFreeRate = getBacktestRiskFreeRate(run);
     renderMetricStack(
         "backtest-results",
         [
             ["Strategy Return", formatPercentValue(summary.portfolio_return_percent), toneClass(summary.portfolio_return_percent)],
             [`${summary.benchmark_symbol} Return`, formatPercentValue(summary.benchmark_return_percent), toneClass(summary.benchmark_return_percent)],
             ["Alpha", `${formatSignedCurrency(summary.alpha_dollars)} / ${formatPercentValue(summary.alpha_percent)}`, toneClass(summary.alpha_percent)],
+            ["Beta", formatCompactNumber(riskMetrics.beta, 2), "neutral", `Daily sensitivity versus ${summary.benchmark_symbol ?? "benchmark"}.`],
+            ["Sharpe Ratio", formatCompactNumber(riskMetrics.sharpeRatio, 2), toneClass(riskMetrics.sharpeRatio), `Annualised daily excess returns, ${formatRatioAsPercent(riskFreeRate, 1)} risk-free rate.`],
             ["Max Drawdown", formatPercentValue(summary.max_drawdown_percent, 1, false), toneClass(summary.max_drawdown_percent)],
             ["Fees Paid", formatCurrency(summary.fees_paid_cumulative, 2)],
             ["Total Trades", formatCompactNumber(summary.trade_count)],
@@ -1246,6 +1370,7 @@ function renderBacktestSettings(run) {
     }
 
     const settings = getBacktestSettings(run);
+    const riskFreeRate = getBacktestRiskFreeRate(run);
     renderMetricStack(
         "backtest-settings",
         [
@@ -1256,6 +1381,7 @@ function renderBacktestSettings(run) {
             ["Single-Stock Cap", formatRatioAsPercent(settings.max_position_fraction, 0)],
             ["Flat Fee", formatCurrency(settings.trade_fee_flat, 2)],
             ["Fee Rate", formatRatioAsPercent(settings.trade_fee_rate, 2)],
+            ["Risk-Free Rate", formatRatioAsPercent(riskFreeRate, 1)],
             ["Results CSV", run.artifacts?.results_path ? "Published" : "Not published"]
         ],
         "Selected backtest settings will appear here."

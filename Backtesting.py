@@ -1,5 +1,6 @@
 import argparse
 import datetime as dt
+import math
 import os
 from pathlib import Path
 import sys
@@ -36,13 +37,14 @@ DEFAULT_S3_PUBLISH_ENABLED = os.getenv("S3_PUBLISH_ENABLED", "").strip().lower()
 DEFAULT_S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 DEFAULT_S3_PREFIX = os.getenv("S3_PREFIX", "")
 DEFAULT_AWS_REGION = os.getenv("AWS_REGION")
+DEFAULT_RISK_FREE_RATE = 0.04
 
 # Backtest parameters for running this file directly from your IDE.
 # Edit these values, then press Run on Backtesting.py.
 RUN_WITH_EDITOR_SETTINGS = True
-EDITOR_START_DATE = "2017-02-01"
-EDITOR_END_DATE = "2026-02-01"
-EDITOR_INITIAL_CASH = 100000
+EDITOR_START_DATE = "2017-01-01"
+EDITOR_END_DATE = "2026-05-01"
+EDITOR_INITIAL_CASH = 10000
 EDITOR_BENCHMARK_SYMBOL = "SPTM"
 EDITOR_RESULTS_PATH = Path("Data/BacktestResults.csv")
 EDITOR_CHART_PATH = Path("Data/BacktestResults.png")
@@ -57,6 +59,7 @@ EDITOR_DEFENSIVE_MODE = "cash"  # "cash" or "treasury_bonds"
 EDITOR_DEFENSIVE_SYMBOL = "IEI" #'SHY'  #Short-duration Treasury ETF proxy
 EDITOR_TRADE_FEE_FLAT = 1.00
 EDITOR_TRADE_FEE_RATE = 0.0005
+EDITOR_RISK_FREE_RATE = DEFAULT_RISK_FREE_RATE
 EDITOR_EXPORT_SITE_DATA = True
 EDITOR_SITE_DATA_PATH = DEFAULT_SITE_DATA_PATH
 EDITOR_SITE_DATA_HISTORY_LIMIT = DEFAULT_SITE_DATA_HISTORY_LIMIT
@@ -123,6 +126,48 @@ def _compute_max_drawdown(values):
     return float(drawdowns.min() * 100.0)
 
 
+def _compute_backtest_risk_metrics(results_df, *, risk_free_rate=DEFAULT_RISK_FREE_RATE):
+    values = pd.DataFrame(
+        {
+            "portfolio": pd.Series(results_df["portfolio_value"], dtype="float64"),
+            "benchmark": pd.Series(results_df["sptm_value"], dtype="float64"),
+        }
+    )
+    returns = values.pct_change(fill_method=None).dropna()
+    returns = returns[
+        returns["portfolio"].apply(math.isfinite)
+        & returns["benchmark"].apply(math.isfinite)
+    ]
+
+    if len(returns) < 2:
+        return {
+            "beta": None,
+            "sharpe_ratio": None,
+        }
+
+    benchmark_variance = returns["benchmark"].var(ddof=1)
+    beta = None
+    if pd.notna(benchmark_variance) and benchmark_variance > 0:
+        beta = float(returns["portfolio"].cov(returns["benchmark"]) / benchmark_variance)
+
+    portfolio_std = returns["portfolio"].std(ddof=1)
+    sharpe_ratio = None
+    if pd.notna(portfolio_std) and portfolio_std > 0:
+        annual_risk_free_rate = float(risk_free_rate or 0.0)
+        daily_risk_free_rate = (
+            math.pow(1.0 + annual_risk_free_rate, 1.0 / 252.0) - 1.0
+            if annual_risk_free_rate > -1.0
+            else annual_risk_free_rate / 252.0
+        )
+        excess_returns = returns["portfolio"] - daily_risk_free_rate
+        sharpe_ratio = float((excess_returns.mean() / portfolio_std) * math.sqrt(252))
+
+    return {
+        "beta": beta,
+        "sharpe_ratio": sharpe_ratio,
+    }
+
+
 def _build_backtest_record(
     results_df,
     *,
@@ -137,6 +182,7 @@ def _build_backtest_record(
     defensive_symbol,
     trade_fee_flat,
     trade_fee_rate,
+    risk_free_rate=DEFAULT_RISK_FREE_RATE,
 ):
     latest = results_df.iloc[-1]
     final_portfolio_value = float(latest["portfolio_value"])
@@ -150,6 +196,7 @@ def _build_backtest_record(
     alpha_percent = portfolio_return - benchmark_return
     alpha_dollars = final_portfolio_value - final_benchmark_value
     max_drawdown = _compute_max_drawdown(results_df["portfolio_value"])
+    risk_metrics = _compute_backtest_risk_metrics(results_df, risk_free_rate=risk_free_rate)
     reserve_label = "Treasury % of Portfolio" if defensive_mode == "treasury_bonds" else "Cash % of Portfolio"
 
     return {
@@ -169,6 +216,7 @@ def _build_backtest_record(
             "defensive_symbol": defensive_symbol if defensive_mode == "treasury_bonds" else "",
             "trade_fee_flat": float(trade_fee_flat),
             "trade_fee_rate": float(trade_fee_rate),
+            "risk_free_rate": float(risk_free_rate),
         },
         "summary": {
             "initial_cash": float(initial_cash),
@@ -179,6 +227,9 @@ def _build_backtest_record(
             "benchmark_return_percent": benchmark_return,
             "alpha_percent": alpha_percent,
             "alpha_dollars": alpha_dollars,
+            "beta": risk_metrics["beta"],
+            "sharpe_ratio": risk_metrics["sharpe_ratio"],
+            "risk_free_rate_percent": float(risk_free_rate) * 100.0,
             "final_reserve_percentage": final_reserve_percentage,
             "reserve_label": reserve_label,
             "positions_final": int(latest["positions"]),
@@ -658,6 +709,7 @@ def run_backtest(
     defensive_symbol="SGOV",
     trade_fee_flat=0.0,
     trade_fee_rate=0.0,
+    risk_free_rate=DEFAULT_RISK_FREE_RATE,
     export_site_data=True,
     site_data_path=DEFAULT_SITE_DATA_PATH,
     site_data_history_limit=DEFAULT_SITE_DATA_HISTORY_LIMIT,
@@ -808,6 +860,7 @@ def run_backtest(
             defensive_symbol=defensive_symbol,
             trade_fee_flat=trade_fee_flat,
             trade_fee_rate=trade_fee_rate,
+            risk_free_rate=risk_free_rate,
         )
 
     if export_site_data and backtest_record is not None:
@@ -857,6 +910,7 @@ def parse_args():
     parser.add_argument("--defensive-symbol", default="SGOV", help="Treasury ETF to use when defensive mode is treasury_bonds.")
     parser.add_argument("--trade-fee-flat", type=float, default=0.0, help="Flat USD fee applied to every trade in the backtest.")
     parser.add_argument("--trade-fee-rate", type=float, default=0.0, help="Proportional fee rate applied to trade notional in the backtest.")
+    parser.add_argument("--risk-free-rate", type=float, default=DEFAULT_RISK_FREE_RATE, help="Annual risk-free rate used for Sharpe ratio, as a decimal. Default 0.04 means 4%.")
     parser.add_argument("--site-data-path", default=str(DEFAULT_SITE_DATA_PATH), help="Folder for website-facing JSON and artifact output.")
     parser.add_argument("--site-data-history-limit", type=int, default=DEFAULT_SITE_DATA_HISTORY_LIMIT, help="Maximum number of recent backtest runs to keep in the published site data.")
     parser.add_argument("--s3-publish-enabled", action="store_true", default=DEFAULT_S3_PUBLISH_ENABLED, help="Upload the published site data files to S3 after each run.")
@@ -885,6 +939,7 @@ def run_backtest_from_editor_settings():
         defensive_symbol=EDITOR_DEFENSIVE_SYMBOL,
         trade_fee_flat=EDITOR_TRADE_FEE_FLAT,
         trade_fee_rate=EDITOR_TRADE_FEE_RATE,
+        risk_free_rate=EDITOR_RISK_FREE_RATE,
         export_site_data=EDITOR_EXPORT_SITE_DATA,
         site_data_path=EDITOR_SITE_DATA_PATH,
         site_data_history_limit=EDITOR_SITE_DATA_HISTORY_LIMIT,
@@ -918,6 +973,7 @@ if __name__ == "__main__":
                 defensive_symbol=args.defensive_symbol,
                 trade_fee_flat=args.trade_fee_flat,
                 trade_fee_rate=args.trade_fee_rate,
+                risk_free_rate=args.risk_free_rate,
                 site_data_path=args.site_data_path,
                 site_data_history_limit=args.site_data_history_limit,
                 s3_publish_enabled=args.s3_publish_enabled,
